@@ -1,0 +1,35 @@
+{
+  "name": "@urma/mcp",
+  "version": "0.1.0",
+  "description": "Deterministic local-first video evidence acquisition over MCP.",
+  "type": "module",
+  "bin": {
+    "urma": "./dist/src/cli/main.js"
+  },
+  "files": [
+    "dist/src",
+    "launcher-v1.mjs",
+    "docs",
+    "README.md",
+    "assets/urma-banner.png",
+    "assets/urma-logo.png"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "pnpm build"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "packageManager": "pnpm@11.19.0",
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "lzma-wasm": "1.0.7",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@types/node": "24.13.3",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,76 @@
+name: Urma v1 native distribution qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 24.21.0
+
+jobs:
+  native-qualification:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            target: windows-x64
+            runner: windows-2025
+          - name: Windows ARM64
+            target: windows-arm64
+            runner: windows-11-vs2026-arm
+          - name: macOS Intel
+            target: macos-x64
+            runner: macos-15-intel
+          - name: macOS Apple Silicon
+            target: macos-arm64
+            runner: macos-15
+          - name: Linux x64 glibc
+            target: linux-x64-glibc
+            runner: ubuntu-24.04
+          - name: Linux ARM64 glibc
+            target: linux-arm64-glibc
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up native Node 24 LTS
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Install raw-source dependencies
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Build raw source
+        shell: bash
+        run: pnpm build
+
+      - name: Run native qualification
+        env:
+          URMA_EXPECTED_TARGET: ${{ matrix.target }}
+          URMA_SOURCE_ROOT: ${{ github.workspace }}
+          URMA_QUALIFY_NODE_VERSION: ${{ env.NODE_VERSION }}
+          URMA_RESULT_DIR: ${{ github.workspace }}/qualification-results/${{ matrix.target }}
+          URMA_RUNNER_LABEL: ${{ matrix.runner }}
+        run: node scripts/qualify-native-distribution.mjs
+
+      - name: Upload native qualification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: urma-qualification-${{ matrix.target }}-${{ github.run_id }}
+          path: ${{ github.workspace }}/qualification-results/${{ matrix.target }}
+          if-no-files-found: warn
+          retention-days: 14

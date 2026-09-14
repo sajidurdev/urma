@@ -1,0 +1,281 @@
+[
+  {
+    "provider": "YouTube",
+    "tier": "A",
+    "url": "https://www.youtube.com/watch?v=yP0axVHdP-U",
+    "fixtureId": "yP0axVHdP-U",
+    "expectedExtractor": "youtube",
+    "restart": true,
+    "refresh": true,
+    "firstClassEligible": true,
+    "notes": "Existing controlled finite public engineering fixture; intentionally long enough to exercise interior and late timestamps."
+  },
+  {
+    "provider": "X / Twitter",
+    "tier": "A",
+    "url": "https://x.com/NASAArtemis/status/2040619776100147411",
+    "fixtureId": "2040619776100147411",
+    "fixtureTitle": "The Orion spacecraft has a couple of backseat drivers",
+    "expectedExtractor": "twitter",
+    "fixtureConfidence": "HIGH",
+    "restart": true,
+    "refresh": true,
+    "firstClassEligible": true,
+    "alternates": [
+      "https://x.com/XFreeze/status/2033674857309757502"
+    ],
+    "notes": "Individual public NASA Artemis post; the logged-out page exposes one View media video link."
+  },
+  {
+    "provider": "Reddit",
+    "tier": "A",
+    "url": "https://www.reddit.com/r/interestingasfuck/comments/1q0jm8w/space_pig/",
+    "fixtureId": "1q0jm8w",
+    "fixtureTitle": "Space pig !!",
+    "expectedExtractor": "Reddit",
+    "fixtureConfidence": "MEDIUM",
+    "restart": true,
+    "refresh": true,
+    "firstClassEligible": true,
+    "alternates": [
+      "https://www.reddit.com/r/aww/comments/j0dt3k/the_dog_wants_to_say_something_on_his_birthday/",
+      "https://www.reddit.com/r/aww/comments/1uwzmbi/this_is_an_amazing_dream/"
+    ],
+    "notes": "Individual public SFW Reddit post reported as native v.redd.it video; logged-out browser currently presents an anti-bot challenge, so confidence is below HIGH."
+  },
+  {
+    "provider": "Twitch VOD",
+    "tier": "A",
+    "url": "https://www.twitch.tv/videos/337694295",
+    "fixtureId": "337694295",
+    "fixtureTitle": "GDQ Hotfix presents: SpeedRunsLive Mystery Game Tournament 13 Top 8 Finals Day 2!",
+    "expectedExtractor": "Twitch",
+    "fixtureConfidence": "MEDIUM",
+    "restart": true,
+    "refresh": true,
+    "firstClassEligible": true,
+    "alternates": [
+      "https://www.twitch.tv/videos/181490738"
+    ],
+    "notes": "Individual GamesDoneQuick VOD page with a long-lived public title; VOD retention and playback stability are the main fixture risks."
+  },
+  {
+    "provider": "Twitch Clip",
+    "tier": "A",
+    "url": "https://www.twitch.tv/gamesdonequick/clip/RefinedCrunchyBulgogiBatChest",
+    "fixtureId": "RefinedCrunchyBulgogiBatChest",
+    "fixtureTitle": "AGDQ 2016 Super Monkey Ball Blitz",
+    "expectedExtractor": "Twitch",
+    "fixtureConfidence": "MEDIUM",
+    "restart": true,
+    "refresh": true,
+    "firstClassEligible": true,
+    "notes": "Individual public GamesDoneQuick clip; it is short and stable enough for a bounded evidence probe if Twitch still serves the clip."
+  },
+  {
+    "provider": "Facebook Video",
+    "tier": "A",
+    "url": "https://www.facebook.com/facebook/videos/prime-time-hack-the-birth-of-facebook-video/238358730483/",
+    "fixtureId": "238358730483",
+    "fixtureTitle": "The birth of Facebook Video",
+    "expectedExtractor": "Facebook",
+    "fixtureConfidence": "HIGH",
+    "restart": true,
+    "refresh": true,
+    "firstClassEligible": true,
+    "alternates": [
+      "https://www.facebook.com/facebook/videos/10153231379946729/"
+    ],
+    "notes": "Long-lived individual Facebook Page video from Facebook's own engineering archive; logged-out page has a title and video route but also shows the normal login overlay."
+  },
+  {
+    "provider": "Facebook Reel",
+    "tier": "A",
+    "url": "https://www.facebook.com/reel/615196334645364",
+    "fixtureId": "615196334645364",
+    "fixtureTitle": "Lara Fabian public Reel",
+    "expectedExtractor": "Facebook",
+    "fixtureConfidence": "MEDIUM",
+    "restart": true,
+    "refresh": true,
+    "firstClassEligible": true,
+    "notes": "Individual /reel/ URL linked from a public article; Facebook's logged-out page is login-overlay heavy, so the fixture is meaningful but not HIGH confidence until Urma resolves it."
+  },
+  {
+    "provider": "Instagram Reel",
+    "tier": "A",
+    "url": "https://www.instagram.com/reel/DJf0_RmSd-T/",
+    "fixtureId": "DJf0_RmSd-T",
+    "fixtureTitle": "Insta360 GO 3S Reel",
+    "expectedExtractor": "Instagram",
+    "fixtureConfidence": "HIGH",
+    "restart": true,
+    "refresh": true,
+    "firstClassEligible": true,
+    "alternates": [
+      "https://www.instagram.com/reel/CIxm6P2A823/"
+    ],
+    "notes": "Individual public Reel from the verified Insta360 account; logged-out browser visibly renders one video and caption, while the older alternate is a known unavailable post."
+  },
+  {
+    "provider": "TikTok",
+    "tier": "A",
+    "url": "https://www.tiktok.com/@scout2015/video/6718335390845095173",
+    "fixtureId": "6718335390845095173",
+    "fixtureTitle": "Scramble up ur name & I'll try to guess it",
+    "expectedExtractor": "TikTok",
+    "fixtureConfidence": "HIGH",
+    "restart": true,
+    "refresh": true,
+    "firstClassEligible": true,
+    "alternates": [
+      "https://www.tiktok.com/@cotwkingthe3/video/7104286562740899114"
+    ],
+    "notes": "Individual public video URL used in TikTok's current official embed-player documentation; the page is a pet video and the provider docs identify it as one post."
+  },
+  {
+    "provider": "Vimeo",
+    "tier": "A",
+    "url": "https://vimeo.com/76979871",
+    "fixtureId": "76979871",
+    "fixtureTitle": "The New Vimeo Player (You Know, For Videos)",
+    "fixtureConfidence": "HIGH",
+    "restart": true,
+    "refresh": true,
+    "firstClassEligible": true,
+    "alternates": [
+      "https://vimeo.com/24831714",
+      "https://vimeo.com/863362136"
+    ],
+    "notes": "Long-lived public Vimeo product/player demo; two individual public Staff Pick alternates are retained because Vimeo's access policy varies by video."
+  },
+  {
+    "provider": "Loom",
+    "tier": "A",
+    "url": "https://www.loom.com/share/0281766fa2d04bb788eaf19e65135184",
+    "fixtureTitle": "Loom embed SDK example",
+    "fixtureId": "0281766fa2d04bb788eaf19e65135184",
+    "fixtureConfidence": "HIGH",
+    "restart": true,
+    "refresh": true,
+    "firstClassEligible": true,
+    "alternates": [
+      "https://www.loom.com/share/d97180be7d674f4fbf57744365457162",
+      "https://www.loom.com/share/473fad25ebd24b5ea8091503253dfecf"
+    ],
+    "notes": "Individual /share/ URL from Loom's own embed SDK example; logged-out browser renders a single approximately 26-second video."
+  },
+  {
+    "provider": "Streamable",
+    "tier": "A",
+    "url": "https://streamable.com/l2wt23",
+    "fixtureTitle": "Demonstration",
+    "fixtureId": "l2wt23",
+    "notes": "Public Streamable demonstration fixture."
+  },
+  {
+    "provider": "Dailymotion",
+    "tier": "A",
+    "url": "https://www.dailymotion.com/video/x84sh87",
+    "fixtureTitle": "Dailymotion demo video",
+    "fixtureId": "x84sh87",
+    "alternates": [
+      "https://www.dailymotion.com/video/x8yfogk",
+      "https://www.dailymotion.com/video/x7v4a2l"
+    ],
+    "restart": true,
+    "refresh": false,
+    "notes": "Long-lived public Dailymotion demo fixture."
+  },
+  {
+    "provider": "Bilibili",
+    "tier": "A",
+    "url": "https://www.bilibili.com/video/BV1zv411H72G",
+    "fixtureId": "BV1zv411H72G",
+    "alternates": [
+      "https://www.bilibili.com/video/BV1ag411i72Q/",
+      "https://www.bilibili.com/video/BV1ot411K73S/"
+    ],
+    "restart": false,
+    "refresh": false,
+    "notes": "Public non-adult game-video fixture; runtime must confirm region and access behavior."
+  },
+  {
+    "provider": "Mux-hosted public HLS",
+    "tier": "A",
+    "url": "https://stream.mux.com/uNbxnGLKJ00yfbijDO8COxTOyVKT01xpxW.m3u8",
+    "fixtureId": "uNbxnGLKJ00yfbijDO8COxTOyVKT01xpxW",
+    "fixtureTitle": "Mux public playback-ID example",
+    "restart": false,
+    "refresh": false,
+    "firstClassEligible": true,
+    "notes": "Public on-demand Mux playback-ID example from the official playback guide; direct HLS is intentionally tested through the generic resolver."
+  },
+  {
+    "provider": "Rumble",
+    "tier": "B",
+    "url": null,
+    "untestedReason": "The readily available official fixture was marked premium; no suitable public no-login finite fixture was selected."
+  },
+  {
+    "provider": "Kick VOD/clip",
+    "tier": "B",
+    "url": null,
+    "untestedReason": "No stable public finite no-login VOD or clip fixture was found during this pass."
+  },
+  {
+    "provider": "LinkedIn public video",
+    "tier": "B",
+    "url": null,
+    "untestedReason": "No stable public no-login finite fixture was found during this pass."
+  },
+  {
+    "provider": "Google Drive public/shared video",
+    "tier": "B",
+    "url": null,
+    "untestedReason": "No stable public shared video fixture was found without account/session ambiguity."
+  },
+  {
+    "provider": "Zoom public/shared recording",
+    "tier": "B",
+    "url": null,
+    "untestedReason": "No stable public shared recording fixture was found during this pass."
+  },
+  {
+    "provider": "Vidyard",
+    "tier": "B",
+    "url": "https://video.vidyard.com/watch/zeFV9EcXkK1tZKMsr2iTrx",
+    "fixtureTitle": "Vidyard demo videos",
+    "fixtureId": "zeFV9EcXkK1tZKMsr2iTrx",
+    "restart": false,
+    "refresh": false,
+    "notes": "Public Vidyard demo fixture."
+  },
+  {
+    "provider": "PeerTube",
+    "tier": "B",
+    "url": "https://peertube.mpu.edu.mo/w/oVwskKD2nvLW2DUZmJBNUR",
+    "fixtureId": "oVwskKD2nvLW2DUZmJBNUR",
+    "restart": false,
+    "refresh": false,
+    "notes": "Public PeerTube upload-demo fixture."
+  },
+  {
+    "provider": "Bluesky-hosted video",
+    "tier": "B",
+    "url": null,
+    "untestedReason": "No stable public Bluesky-hosted finite video page fixture was found during this pass."
+  },
+  {
+    "provider": "Niconico",
+    "tier": "B",
+    "url": null,
+    "untestedReason": "No stable public no-login finite fixture was found during this pass."
+  },
+  {
+    "provider": "Naver/CHZZK/SOOP",
+    "tier": "B",
+    "url": null,
+    "untestedReason": "No stable public no-login finite fixture was found during this pass."
+  }
+]
