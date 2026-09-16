@@ -150,9 +150,10 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y ffmpeg
+          sudo apt-get install --no-install-recommends -y ffmpeg yt-dlp
           ffmpeg -version
           ffprobe -version
+          yt-dlp --version
 
       - name: Install locked dependencies
         shell: bash
