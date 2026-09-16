@@ -208,7 +208,13 @@ test("installation lock refuses a non-directory state path before writing outsid
     acquireInstallationLock(paths),
     (error: unknown) => error instanceof UrmaError && error.code === "UNSUPPORTED_FILESYSTEM",
   );
-  await assert.rejects(readFile(paths.lock), /ENOENT/u);
+  await assert.rejects(
+    readFile(paths.lock),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR"),
+  );
 });
 
 test("safe ZIP extraction rejects traversal, duplicates, case collisions, symlinks, and corrupt data", async (t) => {
