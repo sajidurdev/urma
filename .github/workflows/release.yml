@@ -150,9 +150,18 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y ffmpeg yt-dlp
+          sudo apt-get install --no-install-recommends -y ffmpeg unzip
           ffmpeg -version
           ffprobe -version
+          ytdlp_archive="$RUNNER_TEMP/yt-dlp_linux.zip"
+          ytdlp_root="$RUNNER_TEMP/yt-dlp"
+          curl --fail --location --retry 3 --output "$ytdlp_archive" \
+            "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux.zip"
+          test "$(stat -c '%s' "$ytdlp_archive")" = "40516244"
+          echo "32e72032766bef9199d99d15beb69fd52e46df8f8b06f0d8745db59e04d339e9  $ytdlp_archive" | sha256sum --check --strict
+          mkdir -p "$ytdlp_root"
+          unzip -q "$ytdlp_archive" -d "$ytdlp_root"
+          sudo install -m 0755 "$ytdlp_root/yt-dlp_linux" /usr/local/bin/yt-dlp
           yt-dlp --version
 
       - name: Install locked dependencies
