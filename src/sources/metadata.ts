@@ -510,7 +510,7 @@ function firstSafeCanonicalUrl(
     try {
       return assertRemoteTargetAllowed({ url: value, purpose: "input" }).toString();
     } catch {
-      /* Another observed URL may be the safe logical locator. */
+      /* another observed URL may be the safe logical locator */
     }
   }
   throw new UrmaError(

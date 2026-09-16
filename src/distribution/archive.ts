@@ -337,9 +337,8 @@ export async function extractArchive(
   } else {
     entries = parseTar(await decompressXz(buffer, limits), limits);
   }
-  // Do not remove a caller-owned non-empty directory when validation fails.
-  // Once the destination has been proven empty, it is ours to clean up if a
-  // later entry write fails.
+  // Leave caller-owned non-empty directories untouched on validation failure
+  // Clean up an empty destination if a later entry write fails
   let cleanupAllowed = false;
   try {
     await ensureEmptyDestination(destination);

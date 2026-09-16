@@ -28,10 +28,10 @@ export type CaptionTrackSummary = Readonly<{
   variants?: readonly CaptionVariantSummary[];
 }>;
 export type FormatSummary = Readonly<{
-  /** Provider selector used only inside an acquisition lease. */
+  /** Provider selector used only inside an acquisition lease */
   id: string;
   formatId?: string;
-  /** Snapshot-scoped identity derived from the complete safe description. */
+  /** Snapshot-scoped identity derived from the complete safe description */
   candidateKey?: CandidateKey;
   ext: string | null;
   protocol: string | null;
@@ -74,6 +74,6 @@ export type ResolvedSource = Readonly<{
   formats: readonly FormatSummary[];
   capabilities: SourceCapabilities;
   safeMetadata: Readonly<Record<string, unknown>>;
-  /** Internal marker showing that remote acquisition must use Urma's Safe Proxy. */
+  /** Internal marker requiring Urma's Safe Proxy for remote acquisition */
   remoteAcquisition?: RemoteAcquisitionBoundary;
 }>;

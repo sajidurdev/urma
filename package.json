@@ -1,5 +1,9 @@
 {
-  "name": "@urma/mcp",
+  "name": "urma-mcp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sajidurdev/urma.git"
+  },
   "version": "0.1.0",
   "description": "Deterministic local-first video evidence acquisition over MCP.",
   "type": "module",
@@ -16,6 +20,11 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:unit": "pnpm run build && pnpm exec node --test dist/tests/unit/*.test.js",
+    "test:integration": "pnpm run build && pnpm exec node --test dist/tests/integration/*.test.js",
+    "test": "pnpm run test:unit && pnpm run test:integration",
+    "check": "pnpm run typecheck && pnpm run test",
     "prepack": "pnpm build"
   },
   "engines": {

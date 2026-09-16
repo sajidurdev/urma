@@ -327,7 +327,6 @@ export class SqliteStore implements UrmaStore {
       try {
         this.#db.exec("ROLLBACK");
       } catch {
-        /* preserve original failure */
       }
       throw error;
     }
@@ -627,8 +626,8 @@ export class SqliteStore implements UrmaStore {
     ).map(segmentFromRow);
   }
 
-  // Storage-level FTS capability probe only. EvidenceService does not use this
-  // bounded lookup because its LIMIT cannot establish search completeness.
+  // Probe FTS capability at the storage layer only
+  // EvidenceService uses the bounded fallback because LIMIT cannot prove completeness
   searchTranscriptSegments(
     trackId: string,
     query: string,
@@ -645,7 +644,7 @@ export class SqliteStore implements UrmaStore {
           limit,
         ).map(segmentFromRow);
       } catch {
-        /* punctuation-heavy literal queries use the deterministic fallback */
+        /* use the deterministic fallback for punctuation-heavy literal queries */
       }
     }
     const needle = query.normalize("NFKC").toLowerCase();

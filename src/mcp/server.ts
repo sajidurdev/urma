@@ -30,6 +30,7 @@ import {
 } from "./schemas.js";
 import { redactModelText } from "../subprocess/redaction.js";
 import { URMA_VERSION } from "../version.js";
+import { URMA_SERVER_ICONS } from "./logo.js";
 import { projectMcpOutput } from "./projection.js";
 import {
   diagnosticLog,
@@ -74,8 +75,8 @@ function investigationRefFromOutput(
   }
   return null;
 }
-// Codex exposes structuredContent without a text duplicate; visual resource/image blocks remain in content.
-// Error results continue to use a text block because they have no structured output.
+// Keep visual resources in content; structuredContent carries the data object
+// Use text content for errors because they have no structured output
 type OutputSchema = { parse: (value: unknown) => unknown };
 function success(
   tool: string,
@@ -193,7 +194,7 @@ export function buildMcpServer(
   config: UrmaConfig,
 ): McpServer {
   const server = new McpServer(
-    { name: "urma", version: URMA_VERSION },
+    { name: "urma", version: URMA_VERSION, icons: URMA_SERVER_ICONS },
     { instructions: HOST_GUIDANCE },
   );
   server.registerTool(

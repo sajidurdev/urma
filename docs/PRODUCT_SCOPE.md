@@ -1,5 +1,9 @@
 # Product scope
 
+<p align="center">
+  <img src="assets/product-scope.png" alt="Urma product scope" width="100%" />
+</p>
+
 Urma is a local-first MCP server for acquiring bounded video evidence. It
 resolves a source, pins a finite timeline, acquires source-provided captions or
 video, validates the result, and records provenance for each investigation.
@@ -7,8 +11,7 @@ video, validates the result, and records provenance for each investigation.
 The MCP host owns query formulation, reasoning, semantic interpretation,
 temporal hypotheses, and the decision that the evidence is sufficient.
 
-This document describes the current v0.1 release boundary. It is not a
-roadmap.
+This document defines the v0.1 product boundary.
 
 ## Included in v0.1
 
@@ -46,7 +49,7 @@ speech from a video that has no supported caption track.
 
 ### Distribution and persistence
 
-- npm bootstrap through `@urma/mcp`.
+- npm bootstrap through `urma-mcp`.
 - Native Node.js 24 LTS (`>=24 <25`).
 - Supported targets: Windows x64/arm64, macOS x64/arm64, and Linux x64/arm64
   with glibc.
@@ -84,7 +87,7 @@ look up native tools through `PATH`, or check provider freshness. A later setup
 selects a generation for later processes; an already running process retains
 the generation it loaded.
 
-## Deliberately excluded
+## Excluded from v0.1
 
 Urma v0.1 does not include:
 
@@ -111,9 +114,5 @@ They can also be appended to a caller-selected JSONL file with
 
 ## Scope boundary
 
-A feature belongs in this product only when it can be described as a bounded
-source resolution, acquisition, validation, provenance, or presentation
-operation. The host remains responsible for analysis and conclusions. Any
-operation that changes what a result claims to observe must define its input
-scope, output identity, completeness, failure behavior, and negative guarantee
-before it enters the public MCP surface.
+Before adding a public MCP operation, define its input scope, output identity,
+completeness, failure behavior, and negative guarantee.

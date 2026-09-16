@@ -1,4 +1,4 @@
-/** Current pre-launch storage contract. Older local data is intentionally invalidated. */
+/** Current pre-launch storage contract; older local data is invalidated */
 export const SCHEMA_VERSION = 5;
 
 export const CURRENT_SCHEMA = `

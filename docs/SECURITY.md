@@ -1,12 +1,11 @@
 # Security
 
-This document describes the controls in the local Urma package and the limits
-of those controls. The package is designed for one user running a locally
-installed Node.js runtime and the generation-local FFmpeg, ffprobe, and yt-dlp
-executables.
+<p align="center">
+  <img src="assets/security.png" alt="Urma security" width="100%" />
+</p>
 
-The threat model treats those approved executables and the host operating
-system as trusted. Urma's application checks are not an operating-system
+Urma's controls assume one user, local Node.js, generation-local native
+executables, and a trusted operating system. They are not an operating-system
 sandbox against a compromised Node process or native executable.
 
 ## Local file boundary

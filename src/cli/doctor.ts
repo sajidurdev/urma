@@ -107,7 +107,7 @@ async function installPlatform(): Promise<InstallPlatform> {
     const ids = `${fields.get("ID") ?? ""} ${fields.get("ID_LIKE") ?? ""}`;
     if (/\b(?:ubuntu|debian)\b/u.test(ids)) return "Ubuntu/Debian";
   } catch {
-    // A missing or unreadable os-release only means the distro is unknown.
+    // Missing or unreadable os-release only leaves the distro unknown
   }
   return "Other Linux";
 }
@@ -119,8 +119,8 @@ function guidance(title: string, platform: InstallPlatform): DoctorGuidance {
     ? "https://ffmpeg.org/download.html"
     : "https://github.com/yt-dlp/yt-dlp#installation";
   const setupCommand = title === "Node.js 24+"
-    ? "Install native Node.js 24 LTS, then rerun npx -y @urma/mcp@latest setup"
-    : "npx -y @urma/mcp@latest setup";
+    ? "Install native Node.js 24 LTS, then rerun npx -y urma-mcp@latest setup"
+    : "npx -y urma-mcp@latest setup";
   const commands: Record<InstallPlatform, string> = {
     Windows: setupCommand,
     macOS: setupCommand,
@@ -209,7 +209,6 @@ function sqliteChecks(): [DoctorCheck, DoctorCheck] {
     try {
       database?.close();
     } catch {
-      /* preserve the diagnostic result */
     }
   }
   const sqlite = sqliteVersion === null
@@ -404,7 +403,6 @@ async function databaseCheck(config: UrmaConfig): Promise<DoctorCheck> {
     try {
       database?.close();
     } catch {
-      /* preserve the diagnostic result */
     }
   }
 }

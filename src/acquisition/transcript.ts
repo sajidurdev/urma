@@ -254,7 +254,6 @@ export class TranscriptAcquirer {
             cacheHit: true,
           };
         } catch {
-          /* reacquire corrupt or missing caption bytes */
         }
       }
     }

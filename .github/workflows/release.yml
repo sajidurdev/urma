@@ -1,0 +1,682 @@
+name: Urma release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: Release validation mode
+        required: true
+        type: choice
+        default: test
+        options:
+          - test
+          - rc
+          - stable
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 24.21.0
+
+jobs:
+  validate:
+    name: Validate release request
+    runs-on: ubuntu-24.04
+    outputs:
+      release_type: ${{ steps.metadata.outputs.release_type }}
+      version: ${{ steps.metadata.outputs.version }}
+      dist_tag: ${{ steps.metadata.outputs.dist_tag }}
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Validate branch, version, and tag state
+        id: metadata
+        shell: bash
+        env:
+          RELEASE_TYPE: ${{ inputs.release_type }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+          import { spawnSync } from "node:child_process";
+          import path from "node:path";
+
+          const fail = (message) => {
+            throw new Error(message);
+          };
+          const releaseType = process.env.RELEASE_TYPE;
+          if (!["test", "rc", "stable"].includes(releaseType)) {
+            fail(`Unsupported release type ${JSON.stringify(releaseType)}`);
+          }
+          if (releaseType !== "test" && process.env.GITHUB_REF_NAME !== "main") {
+            fail(`${releaseType} releases may run only from main; received ${process.env.GITHUB_REF_NAME}`);
+          }
+
+          const packagePath = path.join(
+            process.env.GITHUB_WORKSPACE ?? process.cwd(),
+            "package.json",
+          );
+          const packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
+          const version = packageJson.version;
+          if (typeof version !== "string" || version.length === 0) {
+            fail("package.json must contain a non-empty version string");
+          }
+          const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+          const rcVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-rc\.(0|[1-9]\d*)$/u;
+          const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+          if (!semver.test(version)) fail(`package.json version ${version} is not valid semver`);
+          if (releaseType === "rc" && !rcVersion.test(version)) {
+            fail(`rc releases require a version such as 0.1.0-rc.1; received ${version}`);
+          }
+          if (releaseType === "stable" && !stableVersion.test(version)) {
+            fail(`stable releases require a normal semver such as 0.1.0; received ${version}`);
+          }
+
+          if (releaseType !== "test") {
+            const tag = `v${version}`;
+            const currentSha = process.env.GITHUB_SHA;
+            if (typeof currentSha !== "string" || !/^[0-9a-f]{40}$/iu.test(currentSha)) {
+              fail("GITHUB_SHA is unavailable or is not a full commit SHA");
+            }
+            const tagCheck = spawnSync(
+              "git",
+              ["ls-remote", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`],
+              { encoding: "utf8" },
+            );
+            if (tagCheck.status !== 0) {
+              fail(`Could not verify Git tag ${tag}${tagCheck.stderr ? `: ${tagCheck.stderr.trim()}` : ""}`);
+            }
+            const refs = new Map(
+              tagCheck.stdout
+                .trim()
+                .split(/\r?\n/u)
+                .filter(Boolean)
+                .map((line) => line.split(/\s+/u, 2))
+                .filter((parts) => parts.length === 2),
+            );
+            const target = refs.get(`refs/tags/${tag}^{}`) ?? refs.get(`refs/tags/${tag}`);
+            if (target !== undefined && target !== currentSha) {
+              fail(`Git tag ${tag} already exists at ${target}, not current GITHUB_SHA ${currentSha}`);
+            }
+          }
+
+          const output = process.env.GITHUB_OUTPUT;
+          if (!output) fail("GITHUB_OUTPUT is unavailable");
+          const values = {
+            release_type: releaseType,
+            version,
+            dist_tag: releaseType === "test" ? "" : releaseType === "rc" ? "rc" : "latest",
+            release_tag: `v${version}`,
+          };
+          for (const [key, value] of Object.entries(values)) {
+            appendFileSync(output, `${key}=${value}\n`);
+          }
+          NODE
+
+  checks_and_pack:
+    name: Build, test, and pack
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ needs.validate.outputs.version }}
+      release_type: ${{ needs.validate.outputs.release_type }}
+      dist_tag: ${{ needs.validate.outputs.dist_tag }}
+      release_tag: ${{ needs.validate.outputs.release_tag }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm exec tsc -p tsconfig.json --noEmit
+
+      - name: Unit tests
+        shell: bash
+        run: pnpm exec node --test dist/tests/unit/*.test.js
+
+      - name: Integration tests
+        shell: bash
+        run: pnpm exec node --test dist/tests/integration/*.test.js
+
+      - name: Pack the qualified release artifact
+        id: pack
+        shell: bash
+        env:
+          PACK_JSON: ${{ runner.temp }}/urma-pack-${{ github.run_id }}.json
+          EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          npm pack --ignore-scripts --json > "$PACK_JSON"
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+          import path from "node:path";
+
+          const entries = JSON.parse(readFileSync(process.env.PACK_JSON, "utf8"));
+          if (!Array.isArray(entries) || entries.length !== 1 || typeof entries[0]?.filename !== "string") {
+            throw new Error("pack command did not produce exactly one tarball");
+          }
+          const tarball = path.resolve(process.cwd(), entries[0].filename);
+          if (entries[0].version !== process.env.EXPECTED_VERSION) {
+            throw new Error(`Packed version ${entries[0].version} does not match package.json version ${process.env.EXPECTED_VERSION}`);
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `tarball=${tarball}\n`);
+          NODE
+
+      - name: Audit packed contents
+        shell: bash
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
+          PACKAGE_FILES: ${{ runner.temp }}/urma-package-files-${{ github.run_id }}.txt
+        run: |
+          set -euo pipefail
+          tar -tzf "$TARBALL" | sort > "$PACKAGE_FILES"
+          AUDIT_ROOT="$(mktemp -d "$RUNNER_TEMP/urma-package-audit.XXXXXX")"
+          export AUDIT_ROOT
+          tar -xzf "$TARBALL" -C "$AUDIT_ROOT"
+          node --input-type=module <<'NODE'
+          import { readFileSync, statSync } from "node:fs";
+          import path from "node:path";
+
+          const files = new Set(
+            readFileSync(process.env.PACKAGE_FILES, "utf8")
+              .split(/\r?\n/u)
+              .map((line) => line.trim())
+              .filter(Boolean),
+          );
+          const required = [
+            "package/package.json",
+            "package/README.md",
+            "package/launcher-v1.mjs",
+            "package/dist/src/cli/main.js",
+            "package/assets/urma-banner.png",
+            "package/assets/urma-logo.png",
+          ];
+          for (const file of required) {
+            if (!files.has(file)) throw new Error(`Packed artifact is missing ${file}`);
+          }
+          if (![...files].some((file) => file.startsWith("package/docs/"))) {
+            throw new Error("Packed artifact is missing docs/");
+          }
+          for (const prefix of ["package/src/", "package/tests/", "package/compat/", "package/scripts/"]) {
+            if ([...files].some((file) => file.startsWith(prefix))) {
+              throw new Error(`Packed artifact contains excluded path ${prefix}`);
+            }
+          }
+          const packageRoot = path.join(process.env.AUDIT_ROOT, "package");
+          const packageJson = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+          const repositoryUrl = typeof packageJson.repository === "object" && packageJson.repository !== null
+            ? packageJson.repository.url
+            : undefined;
+          if (packageJson.name !== "urma-mcp" || packageJson.version !== process.env.EXPECTED_VERSION || repositoryUrl !== "https://github.com/sajidurdev/urma.git") {
+            throw new Error("Packed package metadata does not match the release request");
+          }
+          statSync(path.join(packageRoot, "dist", "src", "cli", "main.js"));
+          statSync(path.join(packageRoot, "launcher-v1.mjs"));
+          NODE
+
+      - name: Install and prepare the exact packed runtime for compatibility
+        shell: bash
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          COMPAT_PREFIX: ${{ runner.temp }}/urma-compat-package-${{ github.run_id }}
+          COMPAT_DATA_ROOT: ${{ runner.temp }}/urma-compat-data-${{ github.run_id }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+
+          const prefix = path.resolve(process.env.COMPAT_PREFIX);
+          const dataRoot = path.resolve(process.env.COMPAT_DATA_ROOT);
+          mkdirSync(prefix, { recursive: true });
+          const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+          execFileSync(
+            npm,
+            ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", prefix, process.env.TARBALL],
+            { stdio: "inherit" },
+          );
+          const packageRoot = path.join(prefix, "node_modules", "urma-mcp");
+          const cli = path.join(packageRoot, "dist", "src", "cli", "main.js");
+          const environment = { ...process.env };
+          for (const key of Object.keys(environment)) {
+            if (key.startsWith("URMA_RUNTIME_")) delete environment[key];
+          }
+          execFileSync(process.execPath, [cli, "setup", "--data-dir", dataRoot], {
+            stdio: "inherit",
+            env: environment,
+          });
+
+          const active = JSON.parse(readFileSync(path.join(dataRoot, "ACTIVE.json"), "utf8"));
+          const generation = path.join(dataRoot, "installs", active.active);
+          const receipt = JSON.parse(readFileSync(path.join(generation, "receipt.json"), "utf8"));
+          const toolPath = (relative) => path.resolve(generation, ...relative.split(/[\\/]/u));
+          const serverModule = path.join(packageRoot, "dist", "src", "mcp", "stdio.js");
+          const entry = path.join(process.env.RUNNER_TEMP, `urma-compat-entry-${process.env.GITHUB_RUN_ID}.mjs`);
+          writeFileSync(
+            entry,
+            `import { startStdioServer } from ${JSON.stringify(pathToFileURL(serverModule).href)};\nawait startStdioServer();\n`,
+            "utf8",
+          );
+          const githubEnv = process.env.GITHUB_ENV;
+          for (const [key, value] of Object.entries({
+            URMA_COMPAT_SERVER_PATH: entry,
+            URMA_FFMPEG: toolPath(receipt.tools.ffmpeg.relativePath),
+            URMA_FFPROBE: toolPath(receipt.tools.ffprobe.relativePath),
+            URMA_YTDLP: toolPath(receipt.tools.ytdlp.relativePath),
+          })) {
+            appendFileSync(githubEnv, `${key}=${value}\n`);
+          }
+          NODE
+
+      - name: Compatibility gauntlet
+        shell: bash
+        env:
+          URMA_RUN_COMPAT: "1"
+          URMA_COMPAT_TIER: A
+          URMA_COMPAT_REGRESSION_STATUS: "release artifact compatibility gauntlet"
+        run: pnpm exec node dist/compat/run.js
+
+      - name: Generate SHA-256 for the exact tarball
+        id: digest
+        shell: bash
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { appendFileSync, createReadStream, writeFileSync } from "node:fs";
+          import path from "node:path";
+
+          const hash = createHash("sha256");
+          for await (const chunk of createReadStream(process.env.TARBALL)) hash.update(chunk);
+          const sha256 = hash.digest("hex");
+          const digestFile = `${process.env.TARBALL}.sha256`;
+          writeFileSync(digestFile, `${sha256}  ${path.basename(process.env.TARBALL)}\n`, "utf8");
+          appendFileSync(process.env.GITHUB_OUTPUT, `sha256=${sha256}\n`);
+          NODE
+
+      - name: Collect release evidence
+        shell: bash
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          PACKAGE_FILES: ${{ runner.temp }}/urma-package-files-${{ github.run_id }}.txt
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifact/compatibility
+          cp "$TARBALL" release-artifact/
+          cp "$TARBALL.sha256" release-artifact/
+          cp "$PACKAGE_FILES" release-artifact/package-files.txt
+          cp compat/results/latest.json release-artifact/compatibility/latest.json
+          cp compat/results/latest.md release-artifact/compatibility/latest.md
+
+      - name: Upload exact release artifact and evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: urma-release-package-${{ github.run_id }}
+          path: release-artifact
+          if-no-files-found: error
+          retention-days: 14
+
+  compatibility_gate:
+    name: Enforce Tier A compatibility
+    needs:
+      - validate
+      - checks_and_pack
+    if: ${{ needs.checks_and_pack.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Download compatibility evidence
+        uses: actions/download-artifact@v7
+        with:
+          name: urma-release-package-${{ github.run_id }}
+          path: release-artifact
+
+      - name: Evaluate Tier A release gate
+        shell: bash
+        env:
+          RELEASE_TYPE: ${{ needs.validate.outputs.release_type }}
+        run: node scripts/check-compatibility-gate.mjs release-artifact/compatibility/latest.json compat/fixtures/providers.json
+
+  qualify:
+    name: ${{ matrix.name }}
+    needs: checks_and_pack
+    if: ${{ needs.checks_and_pack.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            target: windows-x64
+            runner: windows-2025
+          - name: Windows ARM64
+            target: windows-arm64
+            runner: windows-11-vs2026-arm
+          - name: macOS Intel
+            target: macos-x64
+            runner: macos-15-intel
+          - name: macOS ARM64
+            target: macos-arm64
+            runner: macos-15
+          - name: Linux x64 glibc
+            target: linux-x64-glibc
+            runner: ubuntu-24.04
+          - name: Linux ARM64 glibc
+            target: linux-arm64-glibc
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out the native qualification harness
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Download the exact qualified tarball
+        uses: actions/download-artifact@v7
+        with:
+          name: urma-release-package-${{ github.run_id }}
+          path: release-artifact
+
+      - name: Set up native Node 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Verify the exact tarball and prepare target paths
+        shell: bash
+        env:
+          ARTIFACT_DIR: release-artifact
+          TARGET: ${{ matrix.target }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+          import { createHash } from "node:crypto";
+          import path from "node:path";
+
+          const artifactDir = path.resolve(process.env.ARTIFACT_DIR);
+          const tarballs = readdirSync(artifactDir).filter((file) => file.endsWith(".tgz"));
+          if (tarballs.length !== 1) throw new Error(`Expected one release tarball, found ${tarballs.length}`);
+          const tarball = path.join(artifactDir, tarballs[0]);
+          const digestFile = path.join(artifactDir, `${tarballs[0]}.sha256`);
+          const digestLine = readFileSync(digestFile, "utf8").trim().split(/\s+/u);
+          if (digestLine.length < 2 || digestLine[1] !== tarballs[0]) throw new Error("Tarball checksum filename does not match the downloaded tarball");
+          const hash = createHash("sha256");
+          const bytes = readFileSync(tarball);
+          hash.update(bytes);
+          if (hash.digest("hex") !== digestLine[0]) throw new Error("Downloaded tarball failed its SHA-256 check");
+
+          const evidenceDir = path.posix.join("qualification-results", process.env.TARGET);
+          mkdirSync(evidenceDir, { recursive: true });
+          writeFileSync(path.join(evidenceDir, "tarball.sha256"), readFileSync(digestFile));
+          for (const [key, value] of Object.entries({
+            TARBALL: tarball,
+            DIGEST_FILE: digestFile,
+            EVIDENCE_DIR: evidenceDir,
+          })) {
+            appendFileSync(process.env.GITHUB_ENV, `${key}=${value}\n`);
+          }
+          NODE
+
+      - name: Run the packed tarball native qualification harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          export URMA_EXPECTED_TARGET='${{ matrix.target }}'
+          export URMA_QUALIFY_NODE_VERSION="$NODE_VERSION"
+          export URMA_PACKAGE_TARBALL="$TARBALL"
+          export URMA_RESULT_DIR="$EVIDENCE_DIR"
+          export URMA_RUNNER_LABEL='${{ matrix.runner }}'
+          node scripts/qualify-native.mjs
+
+      - name: Upload native qualification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: urma-qualification-${{ matrix.target }}-${{ github.run_id }}
+          path: qualification-results/${{ matrix.target }}
+          if-no-files-found: warn
+          retention-days: 14
+
+  publish:
+    name: Publish and tag release
+    needs:
+      - validate
+      - checks_and_pack
+      - compatibility_gate
+      - qualify
+    if: ${{ needs.validate.outputs.release_type != 'test' && needs.compatibility_gate.result == 'success' && needs.qualify.result == 'success' }}
+    runs-on: ubuntu-24.04
+    environment: npm-release
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node 24 for npm Trusted Publishing
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Download the exact qualified tarball
+        uses: actions/download-artifact@v7
+        with:
+          name: urma-release-package-${{ github.run_id }}
+          path: release-artifact
+
+      - name: Verify the publication tarball and checksum
+        id: verify_publication
+        shell: bash
+        env:
+          ARTIFACT_DIR: release-artifact
+          EXPECTED_VERSION: ${{ needs.checks_and_pack.outputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync, readdirSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+          import { createHash } from "node:crypto";
+          import path from "node:path";
+
+          const artifactDir = path.resolve(process.env.ARTIFACT_DIR);
+          const tarballs = readdirSync(artifactDir).filter((file) => file.endsWith(".tgz"));
+          if (tarballs.length !== 1) throw new Error(`Expected one release tarball, found ${tarballs.length}`);
+          const tarball = path.join(artifactDir, tarballs[0]);
+          const digestFile = path.join(artifactDir, `${tarballs[0]}.sha256`);
+          const digestLine = readFileSync(digestFile, "utf8").trim().split(/\s+/u);
+          const hash = createHash("sha256").update(readFileSync(tarball)).digest("hex");
+          if (digestLine[0] !== hash || digestLine[1] !== tarballs[0]) throw new Error("Publication tarball failed its SHA-256 check");
+          if (!tarballs[0].includes(process.env.EXPECTED_VERSION)) throw new Error("Publication tarball filename does not contain the package.json version");
+          const packageJsonText = execFileSync("tar", ["-xOf", tarball, "package/package.json"], { encoding: "utf8" });
+          const packageJson = JSON.parse(packageJsonText);
+          const repositoryUrl = typeof packageJson.repository === "object" && packageJson.repository !== null
+            ? packageJson.repository.url
+            : undefined;
+          if (packageJson.name !== "urma-mcp" || packageJson.version !== process.env.EXPECTED_VERSION || repositoryUrl !== "https://github.com/sajidurdev/urma.git") {
+            throw new Error("Publication tarball metadata does not match urma-mcp Trusted Publishing configuration");
+          }
+          for (const [key, value] of Object.entries({ TARBALL: tarball, DIGEST_FILE: digestFile })) {
+            appendFileSync(process.env.GITHUB_ENV, `${key}=${value}\n`);
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `tarball=${tarball}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `digest_file=${digestFile}\n`);
+          NODE
+
+      - name: Check npm Trusted Publishing client version
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+
+          const version = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
+          const parts = version.split(".").map((part) => Number(part));
+          if (parts.length < 3 || parts[0] < 11 || (parts[0] === 11 && (parts[1] < 5 || (parts[1] === 5 && parts[2] < 1)))) {
+            throw new Error(`npm ${version} is too old for Trusted Publishing; require npm >=11.5.1`);
+          }
+          NODE
+
+      - name: Publish the exact qualified tarball
+        shell: bash
+        env:
+          PACKAGE_NAME: urma-mcp
+          VERSION: ${{ needs.checks_and_pack.outputs.version }}
+          DIST_TAG: ${{ needs.checks_and_pack.outputs.dist_tag }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { execFileSync } from "node:child_process";
+          import { readFileSync } from "node:fs";
+
+          const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+          const packageSpec = `${process.env.PACKAGE_NAME}@${process.env.VERSION}`;
+          const tarball = process.env.TARBALL;
+          const expectedIntegrity = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
+          let publishedIntegrity;
+          try {
+            publishedIntegrity = JSON.parse(execFileSync(npm, ["view", packageSpec, "dist.integrity", "--json"], { encoding: "utf8" }));
+          } catch (error) {
+            const detail = `${error?.stderr ?? ""}\n${error?.message ?? error}`;
+            if (!/E404|code E404|404 Not Found/iu.test(detail)) {
+              throw new Error(`Could not determine whether ${packageSpec} is already published: ${detail.trim()}`);
+            }
+          }
+          if (publishedIntegrity !== undefined && publishedIntegrity !== null) {
+            if (publishedIntegrity !== expectedIntegrity) {
+              throw new Error(`npm already contains ${packageSpec} with a different tarball integrity`);
+            }
+            const tags = JSON.parse(execFileSync(npm, ["view", process.env.PACKAGE_NAME, "dist-tags", "--json"], { encoding: "utf8" }));
+            if (tags?.[process.env.DIST_TAG] !== process.env.VERSION) {
+              throw new Error(`npm package ${process.env.PACKAGE_NAME} already contains the exact version, but dist-tag ${process.env.DIST_TAG} does not point to it`);
+            }
+            process.stdout.write(`npm already contains ${packageSpec} with the exact tarball; publish is retry-safe\n`);
+          } else {
+            execFileSync(npm, ["publish", tarball, "--tag", process.env.DIST_TAG, "--access", "public", "--ignore-scripts"], { stdio: "inherit" });
+          }
+          NODE
+
+      - name: Attest the exact qualified tarball after all six lanes pass
+        if: ${{ needs.checks_and_pack.outputs.release_type != 'test' && needs.compatibility_gate.result == 'success' && needs.qualify.result == 'success' }}
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ steps.verify_publication.outputs.tarball }}
+
+      - name: Create matching Git tag
+        shell: bash
+        env:
+          VERSION: ${{ needs.checks_and_pack.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          node --input-type=module <<'NODE'
+          import { spawnSync } from "node:child_process";
+
+          const tag = `v${process.env.VERSION}`;
+          const currentSha = process.env.GITHUB_SHA;
+          if (!/^[0-9a-f]{40}$/iu.test(currentSha ?? "")) throw new Error("GITHUB_SHA is unavailable or is not a full commit SHA");
+          const targetForTag = () => {
+            const result = spawnSync("git", ["ls-remote", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`], { encoding: "utf8" });
+            if (result.status !== 0) throw new Error(`Could not verify Git tag ${tag}${result.stderr ? `: ${result.stderr.trim()}` : ""}`);
+            const refs = new Map(result.stdout.trim().split(/\r?\n/u).filter(Boolean).map((line) => line.split(/\s+/u, 2)).filter((parts) => parts.length === 2));
+            return refs.get(`refs/tags/${tag}^{}`) ?? refs.get(`refs/tags/${tag}`);
+          };
+          const existing = targetForTag();
+          if (existing !== undefined) {
+            if (existing !== currentSha) throw new Error(`Git tag ${tag} already exists at ${existing}, not current GITHUB_SHA ${currentSha}`);
+            process.stdout.write(`Git tag ${tag} already points to current GITHUB_SHA; reusing it\n`);
+          } else {
+            const created = spawnSync("git", ["tag", "--annotate", tag, "--message", `Urma ${process.env.VERSION}`, currentSha], { encoding: "utf8" });
+            if (created.status !== 0) throw new Error(`Could not create Git tag ${tag}: ${created.stderr?.trim() ?? "unknown error"}`);
+            const pushed = spawnSync("git", ["push", "origin", `refs/tags/${tag}`], { encoding: "utf8" });
+            if (pushed.status !== 0) {
+              const afterRace = targetForTag();
+              if (afterRace !== currentSha) throw new Error(`Could not push Git tag ${tag}${pushed.stderr ? `: ${pushed.stderr.trim()}` : ""}`);
+              process.stdout.write(`Git tag ${tag} was created concurrently at current GITHUB_SHA; reusing it\n`);
+            }
+          }
+          NODE
+
+      - name: Create matching GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TYPE: ${{ needs.checks_and_pack.outputs.release_type }}
+          VERSION: ${{ needs.checks_and_pack.outputs.version }}
+          DIST_TAG: ${{ needs.checks_and_pack.outputs.dist_tag }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          RELEASE_ARGS=(
+            --verify-tag "$TAG"
+            --title "Urma ${VERSION}"
+            --notes "Published urma-mcp@${VERSION} with npm dist-tag ${DIST_TAG}."
+          )
+          if [ "$RELEASE_TYPE" = "rc" ]; then
+            RELEASE_ARGS+=(--prerelease)
+          fi
+          if gh release view "$TAG" --json isPrerelease --jq '.isPrerelease' > "$RUNNER_TEMP/urma-release-prerelease.txt"; then
+            EXPECTED_PRERELEASE=false
+            if [ "$RELEASE_TYPE" = "rc" ]; then EXPECTED_PRERELEASE=true; fi
+            ACTUAL_PRERELEASE="$(<"$RUNNER_TEMP/urma-release-prerelease.txt")"
+            if [ "$ACTUAL_PRERELEASE" != "$EXPECTED_PRERELEASE" ]; then
+              echo "GitHub release ${TAG} exists with isPrerelease=${ACTUAL_PRERELEASE}, expected ${EXPECTED_PRERELEASE}" >&2
+              exit 1
+            fi
+            gh release upload "$TAG" "$TARBALL" "$DIGEST_FILE" --clobber
+          else
+            gh release create "$TAG" "${RELEASE_ARGS[@]}" "$TARBALL" "$DIGEST_FILE"
+          fi

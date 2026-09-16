@@ -331,8 +331,7 @@ function parseScheduleCursor(value: string): FrameScheduleCursorPayload {
     const expectedMac = createHmac("sha256", FRAME_SCHEDULE_CURSOR_SECRET)
       .update(encoded)
       .digest("base64url");
-    // Compare the canonical encoded tag, not only its decoded bytes: base64url
-    // has alternate spellings for some non-zero trailing pad bits.
+    // Compare encoded tags directly; base64url has alternate decoded spellings
     const supplied = Buffer.from(suppliedMac, "utf8");
     const expected = Buffer.from(expectedMac, "utf8");
     if (
@@ -459,9 +458,7 @@ function searchPlan(query: string): SearchPlan {
   }
   return { normalized, tokens };
 }
-// FTS tokenization cannot prove normalized substring semantics (especially for
-// punctuation, substrings, and CJK), so it is intentionally not the evidence
-// search source. The scan is bounded and reports when it cannot prove complete.
+// FTS cannot prove normalized substring matches; use the bounded scan for evidence
 function searchSegments(
   segments: readonly StoredSegment[],
   query: string,
@@ -652,13 +649,7 @@ export class EvidenceService {
     this.framePanels = new FramePanelAcquirer(config, store, blobs);
   }
 
-  /**
-   * A shared frame flight returns the producer's source occurrence. Re-admit
-   * the immutable content for this waiter before its investigation presents
-   * it, so content/blob sharing never substitutes for source provenance.
-   * putArtifact's content and record uniqueness make duplicate waiters
-   * idempotent.
-   */
+  /** Rebind shared frame artifacts to this investigation's source occurrence */
   #admitFrameArtifacts(
     source: Pick<ResolvedSource, "sourceRef" | "revision">,
     frames: readonly ExactFrameResult[],

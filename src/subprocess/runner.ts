@@ -45,10 +45,7 @@ const CHILD_ENV_ALLOWLIST = [
   "TZ",
 ] as const;
 
-/**
- * Child processes must not inherit credentials, proxy settings, runtime hooks,
- * browser paths, or arbitrary application state from the Urma host.
- */
+/** Keep credentials, proxy settings, hooks, browser paths, and host state out of child processes */
 export function allowlistedEnvironment(
   input: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
@@ -71,9 +68,7 @@ function terminateTree(pid: number | undefined): void {
     killer.on("error", () => {
       try {
         process.kill(pid, "SIGKILL");
-      } catch {
-        /* process already ended */
-      }
+      } catch {}
     });
   } else {
     try {
@@ -81,9 +76,7 @@ function terminateTree(pid: number | undefined): void {
     } catch {
       try {
         process.kill(pid, "SIGKILL");
-      } catch {
-        /* process already ended */
-      }
+      } catch {}
     }
   }
 }

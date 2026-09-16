@@ -114,7 +114,7 @@ async function preserveActiveAsBackup(paths: DistributionPaths): Promise<void> {
   }
 }
 
-/** Commit only the small selector. Generation directories are never overwritten. */
+/** Commit only the selector; never overwrite generation directories */
 export async function commitActive(
   paths: DistributionPaths,
   selection: ActiveSelection,

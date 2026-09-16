@@ -220,9 +220,7 @@ test("unknown-size overflow aborts the process tree, cleans temp output, and giv
     if (descendant > 0) {
       try {
         process.kill(descendant, "SIGKILL");
-      } catch {
-        /* already terminated */
-      }
+      } catch {}
     }
   });
   const code =

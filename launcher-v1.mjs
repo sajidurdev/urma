@@ -422,7 +422,7 @@ async function start() {
 try {
   if (process.argv[2] === "rollback" && process.argv.length === 3) await rollback();
   else if (process.argv[2] === "recover" && process.argv.length === 3) await recover();
-  else if (process.argv[2] === "setup") fail("setup must be run from the npm release: npx -y @urma/mcp@latest setup");
+  else if (process.argv[2] === "setup") fail("setup must be run from the npm release: npx -y urma-mcp@latest setup");
   else await start();
 } catch (error) {
   process.stderr.write(`Urma startup failed: ${error instanceof Error ? error.message : String(error)}\n`);

@@ -18,7 +18,7 @@ export type YtDlpRunner = (
   options?: RunOptions,
 ) => Promise<ProcessResult>;
 
-/** Raw metadata is process-local staging data and must never be persisted or logged. */
+/** Keep raw metadata process-local; never persist or log it */
 export type ExactFormatSnapshot = Readonly<{
   metadata: Readonly<Record<string, unknown>>;
   selected: Readonly<Record<string, unknown>>;
@@ -86,7 +86,7 @@ const CALLER_SECURITY_FLAGS = new Set([
   "--referer",
 ]);
 
-/** Flags verified against the pinned yt-dlp runtime (2026.08.19). */
+/** Flags verified against pinned yt-dlp 2026.08.19 */
 export function hermeticYtDlpArgs(
   args: readonly string[],
   nodeExecutable: string = process.execPath,
@@ -222,11 +222,7 @@ export class YtDlp {
     }
   }
 
-  /**
-   * Retrieve one resolver-selected manifest as bounded text. yt-dlp remains
-   * the only remote resolver; Urma only parses the typed page that yt-dlp
-   * emits for finite-timeline validation.
-   */
+  /** Read one resolver-selected manifest for finite-timeline validation */
   async manifestText(
     url: string,
     signal?: AbortSignal,
@@ -282,10 +278,7 @@ export class YtDlp {
     );
   }
 
-  /**
-   * Re-resolve once, verify the selected safe representation against the
-   * pinned candidate key, and retain the raw result only for one operation.
-   */
+  /** Re-resolve and verify one snapshot-bound format for this operation */
   async exactFormatSnapshot(
     source: Pick<ResolvedSource, "sourceRef" | "revision" | "canonicalLocator" | "identity">,
     format: FormatSummary,
@@ -389,7 +382,7 @@ export class YtDlp {
     };
   }
 
-  /** Resolve and bind one ephemeral delivery lease to the immutable snapshot. */
+  /** Bind one ephemeral delivery lease to an immutable snapshot */
   async lease(
     source: Pick<ResolvedSource, "sourceRef" | "revision" | "canonicalLocator" | "identity">,
     format: FormatSummary,
@@ -398,8 +391,7 @@ export class YtDlp {
     const snapshot = await this.exactFormatSnapshot(source, format, signal);
     const selected = snapshot.selected;
     const expectedCandidate = snapshot.candidateKey;
-    // Prefer the selector-specific URL when yt-dlp provides one. A
-    // manifest_url fallback remains necessary for formats without a direct URL.
+    // Prefer the selector-specific URL; use manifest_url when it is absent
     const deliveryUrl = typeof selected.url === "string"
       ? selected.url
       : typeof selected.manifest_url === "string"
@@ -429,7 +421,7 @@ export class YtDlp {
       timeoutMs?: number | undefined;
       cwd?: string | undefined;
       remote?: boolean | undefined;
-      /** Internal yt-dlp flags; never populated from a caller request. */
+      /** Internal yt-dlp flags; callers cannot set them */
       internalArgs?: readonly string[] | undefined;
     } = {},
   ): Promise<ProcessResult> {

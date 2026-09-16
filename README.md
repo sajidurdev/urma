@@ -15,7 +15,7 @@
   ·
   <a href="#documentation">Documentation</a>
   <br /><br />
-  <sub><code>@urma/mcp</code> · MCP stdio · Node.js 24 LTS</sub>
+  <sub><code>urma-mcp</code> · MCP stdio · Node.js 24 LTS</sub>
 </div>
 
 <br />
@@ -55,7 +55,7 @@ install or manage Node.js.
 Run the npm bootstrap with Node.js 24:
 
 ```sh
-npx -y @urma/mcp@latest setup
+npx -y urma-mcp@latest setup
 ```
 
 Setup downloads the release-manifest artifacts, verifies them, runs native and
@@ -81,7 +81,7 @@ If the host uses the usual `mcpServers` JSON shape, setup can add the `urma`
 entry and preserve the other entries in the file:
 
 ```sh
-npx -y @urma/mcp@latest setup --client generic --config "/absolute/path/to/mcp.json"
+npx -y urma-mcp@latest setup --client generic --config "/absolute/path/to/mcp.json"
 ```
 
 The configuration file path must be absolute. The resulting entry has this
@@ -201,24 +201,15 @@ in an individual slot and continue with other targets.
 
 ## Evidence rules
 
-- A complete caption miss means no match in the selected caption track under
-  the requested matching rules. It says nothing about uncaptioned audio or
-  video.
-- `get_overview` and frame bursts provide sample points. They do not establish
-  continuous visual coverage.
-- `get_frames` exact points are independent evidence items. A panel is a
-  derived presentation of those items and has no separate timestamp identity.
-- `partial: false` means the eligible result set was established within the
-  applicable search or response limits. It does not turn caption matching or
-  sparse sampling into an exhaustive claim about the source.
-- Cached media is transport state until a tool result presents it to an
-  investigation.
+Results are bounded observations of the selected caption track and returned
+sample points. `partial: false` does not make matching or sparse sampling
+exhaustive. Reopening cached artifacts adds no coverage. See [Evidence Model](docs/EVIDENCE_MODEL.md).
 
 See [Evidence Model](docs/EVIDENCE_MODEL.md) for the full contract.
 
 ## Limits
 
-The following defaults come from the runtime configuration:
+Runtime defaults are:
 
 | Limit | Default |
 | --- | ---: |
@@ -268,8 +259,8 @@ paths. It does not look up FFmpeg, ffprobe, or yt-dlp through `PATH`.
 The npm entry point exposes setup and version checks:
 
 ```sh
-npx -y @urma/mcp@latest --version
-npx -y @urma/mcp@latest setup
+npx -y urma-mcp@latest --version
+npx -y urma-mcp@latest setup
 ```
 
 After setup, run the read-only doctor through the persistent launcher:
@@ -300,13 +291,10 @@ dependencies. A later setup affects new processes only.
 
 ## Boundaries
 
-Urma v0.1 does not perform speech-to-text, OCR, embeddings, vector search,
-semantic ranking, VLM or LLM calls, summarization, object recognition, or
-automatic scene understanding. It does not select playlist items or access
-live, private, paywalled, login-required, or DRM-protected media. It does not
-provide audio evidence through MCP, arbitrary HTTP serving, accounts, cloud
-sync, dashboards, hosted multi-tenant isolation, background indexing, or
-persistent telemetry.
+Urma v0.1 acquires and presents bounded caption and visual evidence. It does
+not perform semantic media analysis, access restricted or live media, or
+provide account, cloud-sync, dashboard, indexing, or telemetry features. See
+[Product scope](docs/PRODUCT_SCOPE.md).
 
 The host decides what evidence to request and whether the returned evidence is
 enough for a conclusion.
@@ -335,11 +323,7 @@ pnpm exec node --test dist/tests/unit/*.test.js
 pnpm exec node --test dist/tests/integration/*.test.js
 ```
 
-The tests cover source resolution, caption selection and limits, cache and
-investigation isolation, frame identity, bounded acquisition, subprocess
-handling, diagnostics, MCP protocol behavior, installation generations,
-archive extraction, selector atomicity, rollback, corruption detection, and
-host registration.
+Current coverage is defined by `tests/unit` and `tests/integration`.
 
 ## Documentation
 
@@ -347,3 +331,4 @@ host registration.
 - [Architecture](docs/ARCHITECTURE.md) — runtime layers, persistence, caching, and acquisition decisions.
 - [Evidence Model](docs/EVIDENCE_MODEL.md) — what each result means and what it cannot establish.
 - [Security](docs/SECURITY.md) — path, network, subprocess, installation, and cache controls.
+- [Contribution](docs/CONTRIBUTING.md) — local setup, validation commands, and change expectations.

@@ -18,11 +18,7 @@ import { parseInvestigationRef, parseSourceRef } from "../src/core/ids.js";
 import { inspectMcpOutput, overviewMcpOutput } from "../src/mcp/schemas.js";
 import { SqliteStore } from "../src/store/sqlite-store.js";
 
-/**
- * Live compatibility is deliberately separate from deterministic CI. The
- * runner only invokes the public MCP contract; resolver/acquisition details
- * are observed from safe model-facing output and persisted safe metadata.
- */
+/** Run compatibility checks through the public MCP contract */
 
 type AnyRecord = Record<string, unknown>;
 type Status = "PASS" | "FAIL" | "BLOCKED" | "UNTESTED" | "NOT_RUN";
@@ -32,13 +28,19 @@ type Classification =
   | "PARTIAL_PASS"
   | "BLOCKED"
   | "UNTESTED";
+type FixtureOutcome =
+  | "PRIMARY_PASSED"
+  | "PRIMARY_FAILED_ALTERNATE_PASSED"
+  | "PROVIDER_UNAVAILABLE_OR_BLOCKED"
+  | "UNSUPPORTED_OR_REGRESSION"
+  | "UNTESTED";
 type FailureClass =
   | "PASS"
   | "FIXTURE_GONE"
   | "FIXTURE_NOT_SINGLE_VIDEO"
   | "FIXTURE_LOGIN_REQUIRED"
   | "FIXTURE_GEO_BLOCKED"
-  | "FIXTURE_LOW_CONFIDENCE"
+  | "FIXTURE_PROCESSING"
   | "PROVIDER_403_OR_RATE_LIMIT"
   | "PROVIDER_EXTRACTION_FAILED"
   | "RESOLVER_FAILED"
@@ -68,11 +70,9 @@ type Fixture = Readonly<{
   fixtureId?: string;
   fixtureTitle?: string;
   expectedExtractor?: string;
-  fixtureConfidence?: "HIGH" | "MEDIUM" | "LOW";
   alternates?: readonly string[];
-  restart?: boolean;
-  refresh?: boolean;
-  firstClassEligible?: boolean;
+  restart: boolean;
+  refresh: boolean;
   notes?: string;
   untestedReason?: string;
 }>;
@@ -110,7 +110,9 @@ const ROOT = path.resolve(
   "..",
   "..",
 );
-const SERVER_PATH = path.join(ROOT, "dist", "src", "cli", "main.js");
+const SERVER_PATH = process.env.URMA_COMPAT_SERVER_PATH?.trim()
+  ? path.resolve(process.env.URMA_COMPAT_SERVER_PATH)
+  : path.join(ROOT, "dist", "src", "cli", "main.js");
 const RESULTS_DIR = path.join(ROOT, "compat", "results");
 const CALL_TIMEOUT_MS = 240_000;
 const SECRET_QUERY = /[?&](?:sig|signature|token|expire|expires|expires_at|hdnts|auth|authorization|x-amz-[^=]+|x-goog-[^=]+)=/iu;
@@ -121,8 +123,22 @@ function record(value: unknown): value is AnyRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function objectValue(value: unknown): AnyRecord {
-  return record(value) ? value : {};
+function requireRecord(value: unknown, label: string): AnyRecord {
+  if (!record(value)) throw new Error(`${label} must be an object`);
+  return value;
+}
+
+function optionalRecord(
+  value: unknown,
+  label: string,
+): AnyRecord | undefined {
+  return value === undefined ? undefined : requireRecord(value, label);
+}
+
+function nullableRecord(value: unknown, label: string): AnyRecord | null {
+  return value === null || value === undefined
+    ? null
+    : requireRecord(value, label);
 }
 
 function stringValue(value: unknown): string | null {
@@ -290,7 +306,7 @@ function isFixtureFailure(failure: FailureClass): boolean {
     "FIXTURE_NOT_SINGLE_VIDEO",
     "FIXTURE_LOGIN_REQUIRED",
     "FIXTURE_GEO_BLOCKED",
-    "FIXTURE_LOW_CONFIDENCE",
+    "FIXTURE_PROCESSING",
     "UNTESTED",
   ].includes(failure)
 }
@@ -310,7 +326,7 @@ function classifyFailure(stage: string, error: ErrorInfo): FailureClass {
     return "PROVIDER_403_OR_RATE_LIMIT";
   }
   if (/video is processing|still processing|processing(?: the)? video/.test(text)) {
-    return "FIXTURE_LOW_CONFIDENCE";
+    return "FIXTURE_PROCESSING";
   }
   if (/drm|encrypted|widevine|fairplay|playready/.test(text)) {
     return "DRM_REJECTED";
@@ -353,7 +369,7 @@ function responsibility(failure: FailureClass): "Urma" | "upstream" | "fixture" 
     "FIXTURE_NOT_SINGLE_VIDEO",
     "FIXTURE_LOGIN_REQUIRED",
     "FIXTURE_GEO_BLOCKED",
-    "FIXTURE_LOW_CONFIDENCE",
+    "FIXTURE_PROCESSING",
   ].includes(failure)) return "fixture";
   if (
     failure === "PROVIDER_403_OR_RATE_LIMIT" ||
@@ -364,6 +380,72 @@ function responsibility(failure: FailureClass): "Urma" | "upstream" | "fixture" 
     failure === "RESOLVER_FAILED"
   ) return "upstream";
   return "Urma";
+}
+
+function recordedFailureClass(value: unknown): FailureClass | null {
+  if (!record(value) || typeof value.class !== "string") return null;
+  return value.class as FailureClass;
+}
+
+function attemptFailureClass(attempt: AnyRecord): FailureClass | null {
+  if (!record(attempt.error)) return null;
+  const error = attempt.error;
+  return classifyFailure(
+    "resolve",
+    errorInfo(
+      typeof error.code === "string" ? error.code : "SOURCE_UNAVAILABLE",
+      typeof error.detail === "string" ? error.detail : "fixture attempt failed",
+      error.retryable === true,
+    ),
+  );
+}
+
+function isProviderUnavailableFailure(failure: FailureClass | null): boolean {
+  return failure !== null && [
+    "FIXTURE_GONE",
+    "FIXTURE_LOGIN_REQUIRED",
+    "FIXTURE_GEO_BLOCKED",
+    "FIXTURE_PROCESSING",
+    "PROVIDER_403_OR_RATE_LIMIT",
+  ].includes(failure);
+}
+
+function fixtureOutcome(fixture: Fixture, result: AnyRecord): FixtureOutcome {
+  if (fixture.url === null) return "UNTESTED";
+  const resolve = record(result.resolve) ? result.resolve : null;
+  if (resolve?.extractorCheck === "FAIL") return "UNSUPPORTED_OR_REGRESSION";
+  const attempts = Array.isArray(result.fixtureAttempts)
+    ? result.fixtureAttempts.filter(record)
+    : [];
+  if (attempts[0]?.status === "PASS") return "PRIMARY_PASSED";
+  if (attempts.slice(1).some((attempt) => attempt.status === "PASS")) {
+    return "PRIMARY_FAILED_ALTERNATE_PASSED";
+  }
+  const attemptFailures = attempts
+    .map(attemptFailureClass)
+    .filter((failure): failure is FailureClass => failure !== null);
+  const recordedFailures = [
+    recordedFailureClass(result.firstBlockingFailure),
+    recordedFailureClass(result.firstFailure),
+  ].filter((failure): failure is FailureClass => failure !== null);
+  if ([...attemptFailures, ...recordedFailures].some(isProviderUnavailableFailure)) {
+    return "PROVIDER_UNAVAILABLE_OR_BLOCKED";
+  }
+  return "UNSUPPORTED_OR_REGRESSION";
+}
+
+function extractorMatch(
+  expected: string | undefined,
+  extractor: string | null,
+  extractorKey: string | null,
+): "PASS" | "FAIL" | "NOT_ASSERTED" {
+  if (expected === undefined) return "NOT_ASSERTED";
+  const wanted = expected.trim().toLowerCase();
+  return [extractor, extractorKey].some(
+    (actual) => actual !== null && actual.trim().toLowerCase() === wanted,
+  )
+    ? "PASS"
+    : "FAIL";
 }
 
 function interiorPoints(durationMs: number, count: number): number[] {
@@ -569,9 +651,15 @@ function failureFromOutcome(outcome: CallOutcome): ErrorInfo {
 }
 
 function inspectData(output: AnyRecord): AnyRecord {
-  const source = record(output.source) ? output.source : {};
-  const timeline = record(source.timeline) ? source.timeline : {};
-  const capabilities = record(output.capabilities) ? output.capabilities : {};
+  const source = requireRecord(output.source, "inspect_video.source");
+  const timeline = requireRecord(
+    source.timeline,
+    "inspect_video.source.timeline",
+  );
+  const capabilities = requireRecord(
+    output.capabilities,
+    "inspect_video.capabilities",
+  );
   return {
     sourceKind: stringValue(source.kind),
     sourceRefFormat: typeof output.sourceRef === "string" &&
@@ -610,7 +698,7 @@ function parseDebugFile(value: string): AnyRecord {
       const parsed: unknown = JSON.parse(line);
       if (record(parsed)) events.push(parsed);
     } catch {
-      // A partial final debug line is not evidence and is ignored.
+      // Ignore an incomplete final debug line
     }
   }
   const exact = events.filter((event) => event.event === "exact-frame-request");
@@ -684,7 +772,6 @@ async function openStorageForInvestigations(
     try {
       debug = await readFile(debugPath, "utf8");
     } catch {
-      // Optional diagnostics.
     }
     return {
       snapshotPresent: snapshot !== null,
@@ -766,13 +853,16 @@ function initialResult(fixture: Fixture, testedAt: string): AnyRecord {
     testedAt,
     fixture: {
       url: safeUrl,
+      primaryUrl: safeUrl,
       fixtureId: fixture.fixtureId ?? null,
       title: fixture.fixtureTitle ?? null,
-      confidence: fixture.fixtureConfidence ?? "LOW",
       alternates: (fixture.alternates ?? []).map(safeFixtureUrl),
       expectedExtractor: fixture.expectedExtractor ?? null,
+      restart: fixture.restart,
+      refresh: fixture.refresh,
       notes: fixture.notes ?? null,
     },
+    fixtureOutcome: fixture.url === null ? "UNTESTED" : "NOT_RUN",
     resolve: { status: fixture.url === null ? "UNTESTED" : "NOT_RUN" },
     singleton: { status: fixture.url === null ? "UNTESTED" : "NOT_RUN" },
     timeline: { status: fixture.url === null ? "UNTESTED" : "NOT_RUN" },
@@ -786,8 +876,14 @@ function initialResult(fixture: Fixture, testedAt: string): AnyRecord {
     captions: { status: fixture.url === null ? "UNTESTED" : "NOT_RUN" },
     transcript: { status: fixture.url === null ? "UNTESTED" : "NOT_RUN" },
     cache: { status: fixture.url === null ? "UNTESTED" : "NOT_RUN" },
-    restart: { status: fixture.url === null ? "UNTESTED" : "NOT_RUN" },
-    refresh: { status: fixture.url === null ? "UNTESTED" : "NOT_RUN" },
+    restart: {
+      enabled: fixture.restart,
+      status: fixture.url === null ? "UNTESTED" : "NOT_RUN",
+    },
+    refresh: {
+      enabled: fixture.refresh,
+      status: fixture.url === null ? "UNTESTED" : "NOT_RUN",
+    },
     provenance: { status: fixture.url === null ? "UNTESTED" : "NOT_RUN" },
     transport: { status: fixture.url === null ? "UNTESTED" : "NOT_RUN" },
     performance: { operations: {} },
@@ -827,7 +923,7 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
   ): FailureClass => addFailure(result, failures, stage, failureFromOutcome(outcome), blocking);
 
   try {
-    const resultFrames = objectValue(result.frames);
+    const resultFrames = requireRecord(result.frames, "result.frames");
     try {
       first = await connect(dataDir, debugPath);
     } catch (error) {
@@ -862,7 +958,7 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
         activeUrl = candidateUrl;
         if (index > 0) {
           result.fixture = {
-            ...objectValue(result.fixture),
+            ...requireRecord(result.fixture, "result.fixture"),
             url: safeFixtureUrl(candidateUrl),
             selectedAlternateIndex: index,
           };
@@ -875,27 +971,7 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
       operationTimings.inspect = outcomeSummary(failedInspect);
       operationTimings.resolve = outcomeSummary(failedInspect);
       const failure = operationFailure("resolve", failedInspect, true);
-      const attemptedFailures = fixtureAttempts.map((attempt) => {
-        const error = record(attempt.error)
-          ? errorInfo(String(attempt.error.code ?? "SOURCE_UNAVAILABLE"), String(attempt.error.detail ?? "fixture attempt failed"), attempt.error.retryable === true)
-          : errorInfo("SOURCE_UNAVAILABLE", "fixture attempt failed");
-        return classifyFailure("resolve", error);
-      });
-      const repeatedHighConfidenceProviderFailure = fixture.fixtureConfidence === "HIGH" &&
-        attemptedFailures.length >= 2 &&
-        attemptedFailures.every((item) => [
-          "FIXTURE_LOGIN_REQUIRED",
-          "PROVIDER_403_OR_RATE_LIMIT",
-          "PROVIDER_EXTRACTION_FAILED",
-        ].includes(item));
-      if (repeatedHighConfidenceProviderFailure) {
-        result.classification = "BLOCKED";
-        const blocking = result.firstBlockingFailure;
-        if (record(blocking)) blocking.responsibility = "upstream";
-      }
-      const failedStatus: Status = repeatedHighConfidenceProviderFailure
-        ? "BLOCKED"
-        : statusForBlockingFailure(failure);
+      const failedStatus: Status = statusForBlockingFailure(failure);
       result.resolve = {
         status: failedStatus,
         error: failureFromOutcome(failedInspect),
@@ -904,9 +980,7 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
         status: failedStatus,
         error: failureFromOutcome(failedInspect),
       };
-      if (!repeatedHighConfidenceProviderFailure) {
-        result.classification = isFixtureFailure(failure) ? "UNTESTED" : "BLOCKED";
-      }
+      result.classification = isFixtureFailure(failure) ? "UNTESTED" : "BLOCKED";
       return result;
     }
     operationTimings.inspect = outcomeSummary(inspectedCall);
@@ -925,7 +999,10 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
     const inspectSummary = inspectData(publicInspect);
     sourceRef = stringValue(publicInspect.sourceRef) ?? "";
     investigationRef = stringValue(publicInspect.investigationRef) ?? "";
-    const publicSource = objectValue(publicInspect.source);
+    const publicSource = requireRecord(
+      publicInspect.source,
+      "inspect_video.source",
+    );
     revision = stringValue(publicSource.snapshotRevision) ?? "";
     durationMs = numberValue(publicSource.durationMs) ?? 0;
     stateResource = stringValue(publicInspect.stateResource) ?? "";
@@ -938,19 +1015,37 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
       return result;
     }
     investigationRefs.push(investigationRef);
+    const extractorCheck = extractorMatch(
+      fixture.expectedExtractor,
+      stringValue(inspectSummary.extractor),
+      stringValue(inspectSummary.extractorKey),
+    );
     result.resolve = {
-      status: "PASS",
+      status: extractorCheck === "FAIL" ? "FAIL" : "PASS",
       extractor: inspectSummary.extractor,
       extractorKey: inspectSummary.extractorKey,
+      expectedExtractor: fixture.expectedExtractor ?? null,
+      extractorCheck,
       sourceRef,
     };
+    if (extractorCheck === "FAIL") {
+      const observed = inspectSummary.extractor ?? inspectSummary.extractorKey ?? "none";
+      const info = errorInfo(
+        "PROVIDER_EXTRACTION_FAILED",
+        `Expected extractor ${fixture.expectedExtractor}, observed ${observed}`,
+      );
+      addFailure(result, failures, "resolve", info, true);
+    }
     result.singleton = {
       status: "PASS",
       admittedExactlyOneVideo: true,
       rejectionPolicy: "no-playlist + single finite video policy",
     };
     const metadataDurationMs = numberValue(inspectSummary.metadataDurationMs);
-    const summaryTimeline = objectValue(inspectSummary.timeline);
+    const summaryTimeline = requireRecord(
+      inspectSummary.timeline,
+      "inspect summary timeline",
+    );
     const validatedDurationMs = numberValue(summaryTimeline.durationMs);
     const timelineBasis = stringValue(summaryTimeline.basis);
     const timelinePass = summaryTimeline.finite === true &&
@@ -973,7 +1068,7 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
       snapshotRevision: revision,
       genericSourceFormat: inspectSummary.sourceKind === "remote" && inspectSummary.sourceRefFormat,
     };
-    if (objectValue(result.inspect).status !== "PASS") {
+    if (requireRecord(result.inspect, "result.inspect").status !== "PASS") {
       const info = errorInfo("INTERNAL_ERROR", "inspect_video did not identify a remote generic source");
       addFailure(result, failures, "inspect", info, true);
     }
@@ -1035,7 +1130,7 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
       addFailure(result, failures, "frame", info, true);
     }
 
-    if (multiplePoints.length >= 1) {
+    if (multiplePoints.length === 3) {
       const multipleCall = await invoke(first.client, "get_frames", {
         investigationRef,
         request: { kind: "points", timesMs: multiplePoints },
@@ -1072,6 +1167,13 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
         resultFrames.multiple = { status: "FAIL", error: failureFromOutcome(multipleCall) };
         operationFailure("multiple-frames", multipleCall, true);
       }
+    } else {
+      const info = errorInfo(
+        "FRAME_FAILED",
+        "Fixture is too short to select three distinct interior timestamps",
+      );
+      resultFrames.multiple = { status: "FAIL", error: info };
+      addFailure(result, failures, "multiple-frames", info, true);
     }
 
     if (oldArtifactResource !== null) {
@@ -1121,13 +1223,32 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
           break;
         }
         const pageOutput = cadenceCall.output!;
-        const slots = Array.isArray(pageOutput.slots) ? pageOutput.slots.filter(record) : [];
-        const pageInfo = record(pageOutput.page) ? pageOutput.page : {};
-        const schedule = record(pageOutput.schedule) ? pageOutput.schedule : {};
+        if (!Array.isArray(pageOutput.slots)) {
+          throw new Error("get_frames cadence response slots must be an array");
+        }
+        const slots = pageOutput.slots.map((value, index) =>
+          requireRecord(value, `get_frames cadence response slots[${index}]`),
+        );
+        const pageInfo = requireRecord(
+          pageOutput.page,
+          "get_frames cadence response page",
+        );
+        const schedule = requireRecord(
+          pageOutput.schedule,
+          "get_frames cadence response schedule",
+        );
         const expectedAtMs = expectedIndex * cadenceMs;
         const slot = slots[0];
+        const expectedTotalTargets = Math.ceil(durationMs / cadenceMs);
+        const validSchedule = schedule.kind === "fixed-cadence" &&
+          schedule.startMs === 0 &&
+          schedule.endMs === durationMs &&
+          schedule.cadenceMs === cadenceMs &&
+          schedule.totalTargets === expectedTotalTargets &&
+          schedule.policyVersion === "fixed-cadence-v1";
         const validPage = pageInfo.startIndex === expectedIndex &&
           pageInfo.endIndexExclusive === expectedIndex + 1 &&
+          validSchedule &&
           slots.length === 1 &&
           slot?.index === expectedIndex &&
           slot.requestedAtMs === expectedAtMs &&
@@ -1138,8 +1259,18 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
           jpeg = resource ? await readJpeg(first.client, resource) : null;
         }
         if (!validPage || jpeg?.status !== "PASS") {
-          const slotError = record(slot?.error)
-            ? errorInfo(String(slot.error.code ?? "FRAME_FAILED"), String(slot.error.detail ?? "Cadence slot failed"), slot.error.retryable === true)
+          const slotErrorValue = slot === undefined
+            ? undefined
+            : optionalRecord(
+              slot.error,
+              "get_frames cadence response slot.error",
+            );
+          const slotError = slotErrorValue
+            ? errorInfo(
+              String(slotErrorValue.code ?? "FRAME_FAILED"),
+              String(slotErrorValue.detail ?? "Cadence slot failed"),
+              slotErrorValue.retryable === true,
+            )
             : null;
           cadenceFailure = jpeg?.error ?? slotError ?? errorInfo("FRAME_FAILED", "Cadence page was not ordered JPEG evidence");
         }
@@ -1277,32 +1408,45 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
       operationTimings.refresh = outcomeSummary(refreshCall);
       if (refreshCall.status === "PASS") {
         const refresh = refreshCall.output!;
-        const newSource = record(refresh.source) ? refresh.source : {};
+        const newSource = requireRecord(refresh.source, "refresh.source");
         const newRef = stringValue(refresh.sourceRef);
         const newInvestigation = stringValue(refresh.investigationRef);
         const newRevision = stringValue(newSource.snapshotRevision);
         const oldState = stateResource ? await readJsonResource(first.client, stateResource).catch(() => null) : null;
         const newStateUri = stringValue(refresh.stateResource);
         const newState = newStateUri ? await readJsonResource(first.client, newStateUri).catch(() => null) : null;
-        const pinned = objectValue(oldState).sourceRevision === revision;
+        const oldStateRecord = nullableRecord(
+          oldState,
+          "refresh old investigation state",
+        );
+        const newStateRecord = nullableRecord(
+          newState,
+          "refresh new investigation state",
+        );
+        const pinned = oldStateRecord?.sourceRevision === revision;
         const passed = newRef === sourceRef &&
           newInvestigation !== null && newInvestigation !== investigationRef &&
           newRevision !== null && newRevision !== revision &&
           pinned &&
-          objectValue(newState).sourceRevision === newRevision;
+          newStateRecord?.sourceRevision === newRevision;
         if (newInvestigation) investigationRefs.push(newInvestigation);
         result.refresh = {
+          enabled: true,
           status: passed ? "PASS" : "FAIL",
           oldRevision: revision,
           newRevision,
           oldInvestigationRef: investigationRef,
           newInvestigationRef: newInvestigation,
           oldInvestigationPinned: pinned,
-          newStateRevision: objectValue(newState).sourceRevision ?? null,
+          newStateRevision: newStateRecord?.sourceRevision ?? null,
         };
         if (!passed) addFailure(result, failures, "refresh", errorInfo("INTERNAL_ERROR", "Refresh did not create an isolated new snapshot while preserving the old investigation"), false);
       } else {
-        result.refresh = { status: "FAIL", error: failureFromOutcome(refreshCall) };
+        result.refresh = {
+          enabled: true,
+          status: "FAIL",
+          error: failureFromOutcome(refreshCall),
+        };
         addFailure(result, failures, "refresh", failureFromOutcome(refreshCall), false);
       }
     }
@@ -1318,13 +1462,14 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
     );
     const storedCaptions = Array.isArray(storage.captionTracks) ? storage.captionTracks : [];
     result.captions = {
-      ...objectValue(result.captions),
+      ...requireRecord(result.captions, "result.captions"),
       formats: [...new Set(storedCaptions.flatMap((track) =>
         Array.isArray(track.formats) ? track.formats : [],
       ))].sort(),
       storageTrackCount: storedCaptions.length,
     };
-    const provenancePass = storage.provenanceSafe === true && objectValue(result.inspect).status === "PASS";
+    const provenancePass = storage.provenanceSafe === true &&
+      requireRecord(result.inspect, "result.inspect").status === "PASS";
     result.provenance = {
       status: provenancePass ? "PASS" : "FAIL",
       safeArtifactCount: storage.artifactCount,
@@ -1343,21 +1488,27 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
       acquisitions: storage.acquisitions,
       subprocessDiagnostics: storage.diagnostics,
     };
-    const transportTimelineBasis = stringValue(objectValue(result.timeline).basis);
-    const capabilities = objectValue(result.inspect).capabilities;
-    const overviewResult = objectValue(result.overview);
+    const transportTimelineBasis = stringValue(
+      requireRecord(result.timeline, "result.timeline").basis,
+    );
+    const capabilities = requireRecord(
+      requireRecord(result.inspect, "result.inspect").capabilities,
+      "result.inspect.capabilities",
+    );
+    const overviewResult = requireRecord(result.overview, "result.overview");
+    const diagnostics = requireRecord(storage.diagnostics, "storage.diagnostics");
     result.transport = {
       status: "PASS",
       class: transportTimelineBasis ?? "other",
-      targetedHlsAcquisition: objectValue(storage.diagnostics).targetedAcquisitionObserved === true,
-      reusableMediaFallback: objectValue(storage.diagnostics).reusableAcquisitionObserved === true,
+      targetedHlsAcquisition: diagnostics.targetedAcquisitionObserved === true,
+      reusableMediaFallback: diagnostics.reusableAcquisitionObserved === true,
       nativeStoryboard: overviewResult.source === "native-storyboard",
       overviewPath: overviewResult.diagnosticsPath ?? null,
       capabilities: {
-        progressive: objectValue(capabilities).progressive === true,
-        hls: objectValue(capabilities).hls === true,
-        dash: objectValue(capabilities).dash === true,
-        mhtml: objectValue(capabilities).mhtml === true,
+        progressive: capabilities.progressive === true,
+        hls: capabilities.hls === true,
+        dash: capabilities.dash === true,
+        mhtml: capabilities.mhtml === true,
       },
       timelineValidationBytes: null,
       reusableMediaAcquisitions: Array.isArray(storage.acquisitions)
@@ -1374,13 +1525,19 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
         const oldState = stateResource ? await readJsonResource(second.client, stateResource).catch(() => null) : null;
         const newStateUri = reopenedInspect.output ? stringValue(reopenedInspect.output.stateResource) : null;
         const newState = newStateUri ? await readJsonResource(second.client, newStateUri).catch(() => null) : null;
-        const oldStateRecord = objectValue(oldState);
-        const newStateRecord = objectValue(newState);
-        const oldVisual = oldStateRecord.evidence;
-        const newVisual = newStateRecord.evidence;
-        const oldClean = oldStateRecord.sourceRevision === revision;
+        const oldStateRecord = nullableRecord(
+          oldState,
+          "restart old investigation state",
+        );
+        const newStateRecord = nullableRecord(
+          newState,
+          "restart new investigation state",
+        );
+        const oldVisual = oldStateRecord?.evidence;
+        const newVisual = newStateRecord?.evidence;
+        const oldClean = oldStateRecord?.sourceRevision === revision;
         const newInvestigation = reopenedInspect.output ? stringValue(reopenedInspect.output.investigationRef) : null;
-        const newEphemeralClean = newStateRecord.cache !== undefined &&
+        const newEphemeralClean = newStateRecord?.cache !== undefined &&
           (!record(newVisual) ||
             (["sparseVisualSets", "exactVisualPoints", "orderedVisualSets"] as const).every((key) =>
               !Array.isArray(newVisual[key]) || newVisual[key].length === 0,
@@ -1391,6 +1548,7 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
           oldClean &&
           newEphemeralClean;
         result.restart = {
+          enabled: true,
           status: passed ? "PASS" : "FAIL",
           oldArtifactReadable: reopened.status === "PASS",
           oldInvestigationPinned: oldClean,
@@ -1404,11 +1562,15 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
         second = null;
       } catch (error) {
         const info = caughtError(error);
-        result.restart = { status: "FAIL", error: info };
+        result.restart = { enabled: true, status: "FAIL", error: info };
         addFailure(result, failures, "restart", info, false);
       }
     } else if (fixture.restart === true) {
-      result.restart = { status: "NOT_RUN", reason: "No exact frame artifact available for restart validation" };
+      result.restart = {
+        enabled: true,
+        status: "NOT_RUN",
+        reason: "No exact frame artifact available for restart validation",
+      };
     }
 
     const finalStorage = await openStorageForInvestigations(
@@ -1419,31 +1581,30 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
       debugPath,
     );
     if ((numberValue(finalStorage.runningAcquisitionCount) ?? 0) > 0) {
-      const restartResult = objectValue(result.restart);
+      const restartResult = requireRecord(result.restart, "result.restart");
       restartResult.leasesResurrected = true;
       restartResult.status = "FAIL";
       addFailure(result, failures, "restart", errorInfo("CACHE_FAILED", "A running acquisition lease remained after process restart"), false);
     }
 
     const foundationalChecks = [
-      objectValue(result.resolve).status === "PASS",
-      objectValue(result.singleton).status === "PASS",
-      objectValue(result.timeline).status === "PASS",
-      objectValue(result.inspect).status === "PASS",
-      objectValue(result.frames).exact !== undefined && objectValue(objectValue(result.frames).exact).status === "PASS",
-      objectValue(result.frames).multiple !== undefined && objectValue(objectValue(result.frames).multiple).status === "PASS",
-      objectValue(result.cache).status === "PASS",
-      objectValue(result.provenance).status === "PASS",
+      requireRecord(result.resolve, "result.resolve").status === "PASS",
+      requireRecord(result.singleton, "result.singleton").status === "PASS",
+      requireRecord(result.timeline, "result.timeline").status === "PASS",
+      requireRecord(result.inspect, "result.inspect").status === "PASS",
+      optionalRecord(resultFrames.exact, "result.frames.exact")?.status === "PASS",
+      optionalRecord(resultFrames.multiple, "result.frames.multiple")?.status === "PASS",
+      requireRecord(result.cache, "result.cache").status === "PASS",
+      requireRecord(result.provenance, "result.provenance").status === "PASS",
     ];
     const foundationalPass = foundationalChecks.every(Boolean);
-    const cadencePass = objectValue(result.cadence).status === "PASS";
+    const cadencePass = requireRecord(result.cadence, "result.cadence").status === "PASS";
     const corePass = foundationalPass && cadencePass;
-    const overviewPass = objectValue(result.overview).status === "PASS";
-    const optionalQualification = (fixture.restart !== true || objectValue(result.restart).status === "PASS") &&
-      (fixture.refresh !== true || objectValue(result.refresh).status === "PASS");
-    const securityPass = objectValue(result.provenance).status === "PASS";
-    const firstClassReady = fixture.fixtureConfidence === "HIGH" &&
-      fixture.firstClassEligible === true &&
+    const overviewPass = requireRecord(result.overview, "result.overview").status === "PASS";
+    const optionalQualification = (fixture.restart !== true || requireRecord(result.restart, "result.restart").status === "PASS") &&
+      (fixture.refresh !== true || requireRecord(result.refresh, "result.refresh").status === "PASS");
+    const securityPass = requireRecord(result.provenance, "result.provenance").status === "PASS";
+    const firstClassReady = fixture.tier === "A" &&
       optionalQualification &&
       securityPass;
     if (corePass && overviewPass && firstClassReady) {
@@ -1465,6 +1626,7 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
     result.classification = "BLOCKED";
     return result;
   } finally {
+    result.fixtureOutcome = fixtureOutcome(fixture, result);
     await first?.client.close().catch(() => undefined);
     await second?.client.close().catch(() => undefined);
     await rm(temporary, { recursive: true, force: true });
@@ -1473,12 +1635,18 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
 
 function matrixStatus(result: AnyRecord, key: string): string {
   const value = result[key];
-  if (record(value) && typeof value.status === "string") return value.status;
-  return "NOT_RUN";
+  if (value === undefined) return "NOT_RUN";
+  const section = requireRecord(value, `compat result.${key}`);
+  if (section.status === undefined) return "NOT_RUN";
+  if (typeof section.status !== "string") {
+    throw new Error(`compat result.${key}.status must be a string`);
+  }
+  return section.status;
 }
 
 function matrixCaptions(result: AnyRecord): string {
-  const captions = record(result.captions) ? result.captions : {};
+  const captions = optionalRecord(result.captions, "compat result.captions");
+  if (captions === undefined) return "NOT_RUN";
   const status = stringValue(captions.status) ?? "NOT_RUN";
   const formats = Array.isArray(captions.formats)
     ? captions.formats.filter((item): item is string => typeof item === "string")
@@ -1487,24 +1655,35 @@ function matrixCaptions(result: AnyRecord): string {
 }
 
 function matrixTranscript(result: AnyRecord): string {
-  const transcript = record(result.transcript) ? result.transcript : {};
+  const transcript = optionalRecord(
+    result.transcript,
+    "compat result.transcript",
+  );
+  if (transcript === undefined) return "NOT_RUN";
   return stringValue(transcript.status) ?? "NOT_RUN";
 }
 
 function matrixTransport(result: AnyRecord): string {
-  const transport = record(result.transport) ? result.transport : {};
-  const capabilities = record(transport.capabilities) ? transport.capabilities : {};
+  const transport = optionalRecord(
+    result.transport,
+    "compat result.transport",
+  );
+  if (transport === undefined) return "other";
+  const capabilities = optionalRecord(
+    transport.capabilities,
+    "compat result.transport.capabilities",
+  );
   const primary = (stringValue(transport.class) ?? "other").toLowerCase();
   let kind = "other";
-  if (transport.nativeStoryboard === true && capabilities.hls !== true && capabilities.dash !== true) {
+  if (transport.nativeStoryboard === true && capabilities?.hls !== true && capabilities?.dash !== true) {
     kind = "MHTML";
-  } else if (capabilities.hls === true && capabilities.dash === true) {
+  } else if (capabilities?.hls === true && capabilities?.dash === true) {
     kind = "mixed/other";
-  } else if (capabilities.hls === true || primary === "hls") {
+  } else if (capabilities?.hls === true || primary === "hls") {
     kind = "HLS";
-  } else if (capabilities.dash === true || primary === "dash") {
+  } else if (capabilities?.dash === true || primary === "dash") {
     kind = "DASH";
-  } else if (capabilities.progressive === true || primary === "progressive" || primary === "container") {
+  } else if (capabilities?.progressive === true || primary === "progressive" || primary === "container") {
     kind = "progressive";
   }
   const details = [
@@ -1531,7 +1710,8 @@ function compactError(result: AnyRecord): string {
 
 function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
   const count = (classification: Classification) => results.filter((result) => result.classification === classification).length;
-  const fixtureOf = (result: AnyRecord): AnyRecord => objectValue(result.fixture);
+  const fixtureOf = (result: AnyRecord): AnyRecord =>
+    requireRecord(result.fixture, "compat result.fixture");
   const exercised = results.filter((result) => {
     const fixture = fixtureOf(result);
     return fixture.url !== null && Array.isArray(result.fixtureAttempts) && result.fixtureAttempts.length > 0;
@@ -1555,8 +1735,19 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
       ? result.firstFailure
       : null;
   const operationMs = (result: AnyRecord, key: string): number | null => {
-    const operations = objectValue(objectValue(result.performance).operations);
-    return record(operations[key]) ? numberValue(operations[key].wallMs) : null;
+    const performance = optionalRecord(
+      result.performance,
+      "compat result.performance",
+    );
+    const operations = optionalRecord(
+      performance?.operations,
+      "compat result.performance.operations",
+    );
+    const operation = optionalRecord(
+      operations?.[key],
+      `compat result.performance.operations.${key}`,
+    );
+    return numberValue(operation?.wallMs);
   };
   const operationText = (result: AnyRecord, key: string): string => String(operationMs(result, key) ?? "—");
 
@@ -1567,6 +1758,7 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
   lines.push(`- Major-platform classifications — FIRST_CLASS_CANDIDATE: ${majorCount("FIRST_CLASS_CANDIDATE")}; BEST_EFFORT_PASS: ${majorCount("BEST_EFFORT_PASS")}; PARTIAL_PASS: ${majorCount("PARTIAL_PASS")}; BLOCKED: ${majorCount("BLOCKED")}; UNTESTED: ${majorCount("UNTESTED")}.`);
   lines.push(`- All selected fixture rows — FIRST_CLASS_CANDIDATE: ${count("FIRST_CLASS_CANDIDATE")}; BEST_EFFORT_PASS: ${count("BEST_EFFORT_PASS")}; PARTIAL_PASS: ${count("PARTIAL_PASS")}; BLOCKED: ${count("BLOCKED")}; UNTESTED: ${count("UNTESTED")}.`);
   lines.push("- Resolve/admission and inspect are recorded from the public production `inspect_video` call because Urma exposes no separate public resolver tool; no resolver or acquisition bypass was added.");
+  lines.push("- `expectedExtractor` is checked case-insensitively against the extractor or extractor key reported by `inspect_video`; omission means extractor identity is not asserted for that fixture.");
   lines.push("- Results are fixture-local observations on the test date, not provider-wide availability guarantees.");
   const findings = results
     .filter((result) => result.classification !== "FIRST_CLASS_CANDIDATE")
@@ -1575,15 +1767,17 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
   if (findings.length === 0) lines.push("- All exercised fixtures met the configured qualification gates.");
   for (const finding of findings) lines.push(`- ${finding}`);
 
-  lines.push("", "## 2. Major-platform compatibility matrix", "", "| Provider | Fixture confidence | Resolve | Timeline | Frames | Cadence | Overview | Captions | Transcript | Cache | Restart | Refresh | Provenance | Transport | Classification |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+  lines.push("", "## 2. Major-platform compatibility matrix", "", "| Provider | Tier | Expected extractor | Actual extractor | Resolve | Timeline | Frames | Cadence | Overview | Captions | Transcript | Cache | Restart | Refresh | Provenance | Transport | Classification | Fixture outcome |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const result of majorResults) {
     const frames = record(result.frames)
       ? `${matrixStatus(result.frames, "exact")}/${matrixStatus(result.frames, "multiple")}`
       : "NOT_RUN";
     const fixture = fixtureOf(result);
-    lines.push(`| ${markdownCell(result.provider)} | ${markdownCell(fixture.confidence ?? "LOW")} | ${matrixStatus(result, "resolve")} | ${matrixStatus(result, "timeline")} | ${frames} | ${matrixStatus(result, "cadence")} | ${matrixStatus(result, "overview")} | ${markdownCell(matrixCaptions(result))} | ${matrixTranscript(result)} | ${matrixStatus(result, "cache")} | ${matrixStatus(result, "restart")} | ${matrixStatus(result, "refresh")} | ${matrixStatus(result, "provenance")} | ${markdownCell(matrixTransport(result))} | ${markdownCell(result.classification)} |`);
+    const resolve = optionalRecord(result.resolve, "compat result.resolve");
+    const actualExtractor = stringValue(resolve?.extractor) ?? stringValue(resolve?.extractorKey) ?? "not reported";
+    lines.push(`| ${markdownCell(result.provider)} | ${markdownCell(result.tier)} | ${markdownCell(fixture.expectedExtractor ?? "not asserted")} | ${markdownCell(actualExtractor)} | ${matrixStatus(result, "resolve")} | ${matrixStatus(result, "timeline")} | ${frames} | ${matrixStatus(result, "cadence")} | ${matrixStatus(result, "overview")} | ${markdownCell(matrixCaptions(result))} | ${matrixTranscript(result)} | ${matrixStatus(result, "cache")} | ${matrixStatus(result, "restart")} | ${matrixStatus(result, "refresh")} | ${matrixStatus(result, "provenance")} | ${markdownCell(matrixTransport(result))} | ${markdownCell(result.classification)} | ${markdownCell(result.fixtureOutcome ?? "NOT_RUN")} |`);
   }
-  if (majorResults.length === 0) lines.push("| — | — | — | — | — | — | — | — | — | — | — | — | — | — | UNTESTED |");
+  if (majorResults.length === 0) lines.push("| — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | UNTESTED | UNTESTED |");
 
   lines.push("", "## 3. Fixture quality", "");
   if (majorResults.length === 0) lines.push("No major-platform fixture was exercised.");
@@ -1591,24 +1785,42 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
     const fixture = fixtureOf(result);
     const attempts = Array.isArray(result.fixtureAttempts) ? result.fixtureAttempts.filter(record) : [];
     const attempted = attempts.length > 0
-      ? attempts.map((attempt) => `${String(attempt.url)} → ${String(attempt.status)}`).join("; ")
+      ? attempts.map((attempt) => {
+        const error = optionalRecord(attempt.error, "compat result.fixtureAttempts.error");
+        const detail = error === undefined
+          ? ""
+          : ` (${String(error.code)}: ${String(error.detail)})`;
+        return `${String(attempt.url)} → ${String(attempt.status)}${detail}`;
+      }).join("; ")
       : "none";
+    const primaryAttempt = attempts[0];
+    const primaryError = optionalRecord(primaryAttempt?.error, "compat result.fixtureAttempts[0].error");
+    let primaryAttemptText = "not attempted";
+    if (primaryAttempt !== undefined) {
+      primaryAttemptText = String(primaryAttempt.status);
+      if (primaryError !== undefined) {
+        primaryAttemptText += ` — ${String(primaryError.code)}: ${String(primaryError.detail)}`;
+      }
+    }
     lines.push(`- **${String(result.provider)}**`);
-    lines.push(`  - fixture URL: ${String(fixture.url ?? "none")}`);
-    lines.push(`  - why this is a good/bad fixture: ${String(fixture.notes ?? "No fixture note recorded")}`);
-    lines.push(`  - confidence: ${String(fixture.confidence ?? "LOW")}`);
+    lines.push(`  - primary fixture URL: ${String(fixture.primaryUrl ?? fixture.url ?? "none")}`);
+    lines.push(`  - tier: ${String(result.tier ?? "unknown")}`);
+    lines.push(`  - expected extractor: ${String(fixture.expectedExtractor ?? "not asserted")}`);
+    lines.push(`  - fixture rationale: ${String(fixture.notes ?? "No fixture note recorded")}`);
+    lines.push(`  - fixture outcome: ${String(result.fixtureOutcome ?? "NOT_RUN")}`);
+    lines.push(`  - primary attempt: ${primaryAttemptText}`);
     lines.push(`  - alternates attempted: ${attempted}`);
   }
 
   lines.push("", "## 4. First-class candidates", "");
   if (firstClass.length === 0) lines.push("None met the configured first-class qualification gates in this run.");
-  for (const result of firstClass) lines.push(`- **${String(result.provider)}**: high-confidence fixture passed singleton admission, finite timeline, inspect, exact and multiple frames, bounded cadence, overview, cache reuse, safe provenance, restart, and refresh.`);
+  for (const result of firstClass) lines.push(`- **${String(result.provider)}**: Tier A fixture passed singleton admission, finite timeline, inspect, exact and multiple frames, bounded cadence, overview, cache reuse, safe provenance, restart, and refresh.`);
 
   lines.push("", "## 5. Best-effort passes", "");
   if (bestEffort.length === 0) lines.push("None.");
   for (const result of bestEffort) {
     const fixture = fixtureOf(result);
-    lines.push(`- **${String(result.provider)}**: complete generic evidence path passed on a ${String(fixture.confidence ?? "LOW")} confidence fixture; first-class qualification remains limited by fixture depth, provider stability, or configured lifecycle evidence.`);
+    lines.push(`- **${String(result.provider)}**: complete generic evidence path passed on a Tier ${String(result.tier ?? "unknown")} fixture; first-class qualification remains limited by fixture tier or configured lifecycle evidence.`);
   }
 
   lines.push("", "## 6. Partial passes", "");
@@ -1621,7 +1833,7 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
     const failure = firstFailure(result);
     const attempts = Array.isArray(result.fixtureAttempts) ? result.fixtureAttempts.length : 0;
     lines.push(`- **${String(result.provider)}**`);
-    lines.push(`  - fixture confidence: ${String(fixtureOf(result).confidence ?? "LOW")}`);
+    lines.push(`  - fixture outcome: ${String(result.fixtureOutcome ?? "NOT_RUN")}`);
     lines.push(`  - failure code: ${String(failure?.class ?? "INTERNAL_BUG")}`);
     lines.push(`  - actual observed failure: ${String(failure?.observedError ?? "not recorded")}`);
     lines.push(`  - stage: ${String(failure?.stage ?? "unknown")}`);
@@ -1652,9 +1864,12 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
   lines.push("", "## 11. Transport findings", "");
   if (majorResults.length === 0) lines.push("No transport was observed.");
   for (const result of majorResults) {
-    const transport = record(result.transport) ? result.transport : {};
-    const performance = objectValue(result.performance);
-    lines.push(`- **${String(result.provider)}**: ${matrixTransport(result)}; overview path=${String(transport.overviewPath ?? "unknown")}; partial-download exception=${String(transport.partialDownloadException ?? false)}; network accounting=${performance.networkAccountingComplete === true ? "complete" : "incomplete/unknown"}.`);
+    const transport = optionalRecord(result.transport, "compat result.transport");
+    const performance = optionalRecord(
+      result.performance,
+      "compat result.performance",
+    );
+    lines.push(`- **${String(result.provider)}**: ${matrixTransport(result)}; overview path=${String(transport?.overviewPath ?? "unknown")}; partial-download exception=${String(transport?.partialDownloadException ?? false)}; network accounting=${performance?.networkAccountingComplete === true ? "complete" : "incomplete/unknown"}.`);
   }
   lines.push("- Split A/V is reported only when safe persisted metadata exposes it; otherwise the selected progressive/container or manifest basis is reported as observed.");
 
@@ -1668,18 +1883,30 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
   lines.push("", "## 13. Performance observations", "", "Measured wall times and persisted artifact/process diagnostics are fixture-local observations, not a benchmark.", "", "| Provider | Resolve/admission ms | Inspect ms | Exact-frame ms | Multi-frame ms | Cadence page 1 ms | Overview ms | Cache-repeat ms | Artifact/media bytes | Network bytes | yt-dlp | ffprobe | ffmpeg |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
   const performanceFlags: string[] = [];
   for (const result of majorResults) {
-    const performance = objectValue(result.performance);
-    const diagnostics = objectValue(performance.subprocessDiagnostics);
-    const counts = objectValue(diagnostics.subprocessCounts);
-    const artifactBytes = numberValue(performance.artifactBytes);
-    lines.push(`| ${markdownCell(result.provider)} | ${operationText(result, "resolve")} | ${operationText(result, "inspect")} | ${operationText(result, "exactFrame")} | ${operationText(result, "multipleFrames")} | ${operationText(result, "cadencePage1")} | ${operationText(result, "overview")} | ${operationText(result, "cacheRepeat")} | ${String(artifactBytes ?? "—")} | ${String(performance.networkBytes ?? "unknown")} | ${String(counts.ytDlp ?? "—")} | ${String(counts.ffprobe ?? "—")} | ${String(counts.ffmpeg ?? "—")} |`);
+    const performance = optionalRecord(
+      result.performance,
+      "compat result.performance",
+    );
+    const diagnostics = optionalRecord(
+      performance?.subprocessDiagnostics,
+      "compat result.performance.subprocessDiagnostics",
+    );
+    const counts = optionalRecord(
+      diagnostics?.subprocessCounts,
+      "compat result.performance.subprocessDiagnostics.subprocessCounts",
+    );
+    const artifactBytes = numberValue(performance?.artifactBytes);
+    lines.push(`| ${markdownCell(result.provider)} | ${operationText(result, "resolve")} | ${operationText(result, "inspect")} | ${operationText(result, "exactFrame")} | ${operationText(result, "multipleFrames")} | ${operationText(result, "cadencePage1")} | ${operationText(result, "overview")} | ${operationText(result, "cacheRepeat")} | ${String(artifactBytes ?? "—")} | ${String(performance?.networkBytes ?? "unknown")} | ${String(counts?.ytDlp ?? "—")} | ${String(counts?.ffprobe ?? "—")} | ${String(counts?.ffmpeg ?? "—")} |`);
     if ((operationMs(result, "exactFrame") ?? 0) > 30_000) performanceFlags.push(`${String(result.provider)} exact-frame cold latency >30s`);
     if ((operationMs(result, "multipleFrames") ?? 0) > 60_000) performanceFlags.push(`${String(result.provider)} multi-frame >60s`);
     if ((operationMs(result, "cadencePage1") ?? 0) > 60_000) performanceFlags.push(`${String(result.provider)} cadence >60s`);
     if ((artifactBytes ?? 0) > 128 * 1024 * 1024) performanceFlags.push(`${String(result.provider)} acquisition/artifacts >128 MiB`);
-    const overview = objectValue(result.overview);
-    const overviewArtifact = objectValue(overview.artifact);
-    if ((numberValue(overviewArtifact.byteSize) ?? 0) >= 200 * 1024 * 1024) performanceFlags.push(`${String(result.provider)} overview approaches/exceeds 256 MiB`);
+    const overview = requireRecord(result.overview, "compat result.overview");
+    const overviewArtifact = optionalRecord(
+      overview.artifact,
+      "compat result.overview.artifact",
+    );
+    if ((numberValue(overviewArtifact?.byteSize) ?? 0) >= 200 * 1024 * 1024) performanceFlags.push(`${String(result.provider)} overview approaches/exceeds 256 MiB`);
   }
   lines.push(`- Threshold flags: ${performanceFlags.length > 0 ? performanceFlags.join("; ") : "none observed"}.`);
 
@@ -1742,7 +1969,7 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
     : progressiveSlow
     ? "C. progressive bounded acquisition"
     : "A. more provider qualification";
-  lines.push("", "## 16. Next engineering priority", "", `**${nextPriority}**. This is selected from measured fixture results: overview failures take precedence when they expose a generic acquisition-budget gap; otherwise unresolved provider coverage, resolver failures, or slow progressive acquisition determine the next slice.`);
+  lines.push("", "## 16. Next engineering priority", "", `**${nextPriority}**. Chosen from measured fixture results: overview failures take precedence when they expose a generic acquisition-budget gap; otherwise unresolved provider coverage, resolver failures, or slow progressive acquisition determine the next slice.`);
 
   const enoughEvidence = process.env.URMA_YOUTUBE_BASELINE === "PASS" || firstClass.length > 0 || bestEffort.length > 0;
   lines.push("", "## 17. Final verdict", "", enoughEvidence ? "YES, WITH IMPORTANT QUALIFICATIONS" : "NO", "", enoughEvidence
@@ -1752,28 +1979,72 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
 }
 
 
+function fixtureBoolean(
+  item: AnyRecord,
+  key: "restart" | "refresh",
+  provider: string,
+  url: string | null,
+): boolean {
+  const value = item[key];
+  if (value === undefined) {
+    if (url !== null) {
+      throw new Error(`Runnable ${provider} fixture must declare ${key} as true or false`);
+    }
+    return false;
+  }
+  if (typeof value !== "boolean") {
+    throw new Error(`Fixture ${provider} field ${key} must be a boolean`);
+  }
+  return value;
+}
+
+function optionalExpectedExtractor(
+  value: unknown,
+  provider: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`Fixture ${provider} expectedExtractor must be a non-empty string when present`);
+  }
+  return value.trim();
+}
+
 async function loadFixtures(): Promise<Fixture[]> {
   const raw = JSON.parse(await readFile(path.join(ROOT, "compat", "fixtures", "providers.json"), "utf8")) as unknown;
   if (!Array.isArray(raw)) throw new Error("compat fixture manifest must be an array");
-  return raw.filter(record).map((item) => ({
-    provider: String(item.provider),
-    tier: item.tier === "B" ? "B" : "A",
-    url: typeof item.url === "string" ? item.url : null,
-    ...(typeof item.fixtureId === "string" ? { fixtureId: item.fixtureId } : {}),
-    ...(typeof item.fixtureTitle === "string" ? { fixtureTitle: item.fixtureTitle } : {}),
-    ...(typeof item.expectedExtractor === "string" ? { expectedExtractor: item.expectedExtractor } : {}),
-    ...(item.fixtureConfidence === "HIGH" || item.fixtureConfidence === "MEDIUM" || item.fixtureConfidence === "LOW"
-      ? { fixtureConfidence: item.fixtureConfidence }
-      : {}),
-    ...(Array.isArray(item.alternates)
-      ? { alternates: item.alternates.filter((value): value is string => typeof value === "string") }
-      : {}),
-    ...(item.restart === true ? { restart: true } : {}),
-    ...(item.refresh === true ? { refresh: true } : {}),
-    ...(item.firstClassEligible === true ? { firstClassEligible: true } : {}),
-    ...(typeof item.notes === "string" ? { notes: item.notes } : {}),
-    ...(typeof item.untestedReason === "string" ? { untestedReason: item.untestedReason } : {}),
-  }));
+  return raw.map((item, index) => {
+    if (!record(item)) throw new Error(`compat fixture row ${index + 1} must be an object`);
+    if (typeof item.provider !== "string" || item.provider.trim().length === 0) {
+      throw new Error(`compat fixture row ${index + 1} must contain a non-empty provider`);
+    }
+    if (item.tier !== "A" && item.tier !== "B") {
+      throw new Error(`compat fixture ${item.provider} must declare tier A or B`);
+    }
+    if (item.url !== undefined && item.url !== null && typeof item.url !== "string") {
+      throw new Error(`compat fixture ${item.provider} url must be a string or null`);
+    }
+    const provider = item.provider.trim();
+    const url = typeof item.url === "string" ? item.url : null;
+    const expectedExtractor = optionalExpectedExtractor(
+      item.expectedExtractor,
+      provider,
+    );
+    return {
+      provider,
+      tier: item.tier,
+      url,
+      ...(typeof item.fixtureId === "string" ? { fixtureId: item.fixtureId } : {}),
+      ...(typeof item.fixtureTitle === "string" ? { fixtureTitle: item.fixtureTitle } : {}),
+      ...(expectedExtractor === undefined ? {} : { expectedExtractor }),
+      ...(Array.isArray(item.alternates)
+        ? { alternates: item.alternates.filter((value): value is string => typeof value === "string") }
+        : {}),
+      restart: fixtureBoolean(item, "restart", provider, url),
+      refresh: fixtureBoolean(item, "refresh", provider, url),
+      ...(typeof item.notes === "string" ? { notes: item.notes } : {}),
+      ...(typeof item.untestedReason === "string" ? { untestedReason: item.untestedReason } : {}),
+    };
+  });
 }
 
 const enabled = process.env.URMA_RUN_COMPAT === "1";

@@ -79,7 +79,6 @@ export class FramePanelAcquirer {
         });
         return { artifact: cached, dimensions, cacheHit: true };
       } catch {
-        // Invalid or corrupt cached presentation material is regenerated.
       }
     }
 

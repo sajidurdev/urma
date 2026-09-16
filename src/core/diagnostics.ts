@@ -144,11 +144,7 @@ function formatSectionBounds(
   return startMs === null || endMs === null ? null : `${startMs}-${endMs}`;
 }
 
-/**
- * Request-local debug trace. It is only constructed by the exact-frame path
- * when debug diagnostics are enabled; it has no role in cache or evidence
- * identity.
- */
+/** Request-local exact-frame trace; disabled tracing does not affect evidence */
 export class ExactFrameDiagnosticTrace {
   readonly correlationId = randomUUID().replaceAll("-", "").slice(0, 16);
   readonly #started = performance.now();
@@ -550,14 +546,14 @@ export class ExactFrameDiagnosticTrace {
   }
 }
 
-/** Return the current exact-frame trace, if debug tracing is active. */
+/** Get the active exact-frame trace */
 export function currentExactFrameDiagnosticTrace():
   | ExactFrameDiagnosticTrace
   | null {
   return diagnosticStorage.getStore() ?? null;
 }
 
-/** Run an operation in a request-local trace, without changing disabled behavior. */
+/** Run an operation with request-local exact-frame tracing */
 export async function withExactFrameDiagnostics<T>(
   enabled: boolean,
   seed: ExactFrameDiagnosticSeed,
@@ -606,7 +602,7 @@ export function recordDiagnosticSubprocess(
   currentExactFrameDiagnosticTrace()?.recordSubprocess(name, wallMs, role);
 }
 
-/** Write opt-in development diagnostics without contaminating MCP stdout. */
+/** Write opt-in diagnostics to stderr and the debug file */
 export function diagnosticLog(
   enabled: boolean,
   event: string,
@@ -628,14 +624,14 @@ export function diagnosticLog(
   try {
     process.stderr.write(`Urma debug ${line}\n`);
   } catch {
-    // Diagnostics must never change the evidence operation's result.
+    // Ignore stderr diagnostic failures
   }
   const file = process.env.URMA_DEBUG_FILE?.trim();
   if (!file) return;
   try {
     appendFileSync(file, `${line}\n`, { encoding: "utf8", flag: "a" });
   } catch {
-    // An unavailable debug file must never change MCP operation.
+    // Ignore debug-file failures
   }
 }
 

@@ -65,7 +65,10 @@ test("stdio server keeps stdout protocol-clean", async (t) => {
   const serverVersion = client.getServerVersion();
   assert.equal(serverVersion?.name, "urma");
   assert.equal(serverVersion?.version, URMA_VERSION);
-  assert.equal(serverVersion?.icons, undefined);
+  assert.equal(serverVersion?.icons?.length, 1);
+  assert.equal(serverVersion?.icons?.[0]?.mimeType, "image/png");
+  assert.deepEqual(serverVersion?.icons?.[0]?.sizes, ["256x256"]);
+  assert.match(serverVersion?.icons?.[0]?.src ?? "", /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/);
   const listed = await client.listTools();
   assert.deepEqual(
     listed.tools.map((tool) => tool.name),
@@ -234,7 +237,10 @@ test("raw stdio stdout stays valid MCP JSON-RPC through startup, discovery, requ
       }[];
     };
   };
-  assert.equal(serverInfo.serverInfo?.icons, undefined);
+  assert.equal(serverInfo.serverInfo?.icons?.length, 1);
+  assert.equal(serverInfo.serverInfo?.icons?.[0]?.mimeType, "image/png");
+  assert.deepEqual(serverInfo.serverInfo?.icons?.[0]?.sizes, ["256x256"]);
+  assert.match(serverInfo.serverInfo?.icons?.[0]?.src ?? "", /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/);
   child.stdin.write(
     `${
       JSON.stringify({

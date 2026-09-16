@@ -8,9 +8,9 @@ type Entry = {
 };
 
 /**
- * Coalesces identical in-flight acquisition work while keeping cancellation
- * local to each observer. The shared worker is cancelled only after every
- * observer has detached.
+ * Coalesce identical in-flight work
+ * Keep cancellation local to each observer
+ * Cancel shared work after the last observer detaches
  */
 export class Singleflight {
   readonly #entries = new Map<string, Entry>();

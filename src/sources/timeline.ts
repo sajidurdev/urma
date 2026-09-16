@@ -43,9 +43,8 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Validate metadata emitted by yt-dlp after resolving the selected transport
- * locator itself. This is distinct from source-page metadata: the value comes
- * from the selected HLS/DASH transport, and live/dynamic results are rejected.
+ * Validate metadata from the selected HLS/DASH transport locator
+ * Reject live and dynamic results
  */
 export function validateFiniteTransportMetadata(
   info: Readonly<Record<string, unknown>>,
@@ -93,7 +92,7 @@ export function validateFiniteTransportMetadata(
   return positiveDuration(Math.round(durationSeconds * 1_000), basis);
 }
 
-/** Validate a staged progressive/container probe; never accepts a URL. */
+/** Validate a staged progressive/container probe; never accept a URL */
 export function validateProgressiveProbe(
   probe: Readonly<Record<string, unknown>>,
   basis: TimelineBasis = "progressive",
@@ -117,7 +116,7 @@ export function validateProgressiveProbe(
   return positiveDuration(Math.round(durationSeconds * 1_000), basis);
 }
 
-/** Validate one selected finite HLS media playlist, not a master playlist. */
+/** Validate one finite HLS media playlist, not a master playlist */
 export function validateFiniteHlsManifest(
   manifest: string,
   budget: TimelineValidationBudget = {},
@@ -169,7 +168,7 @@ function isoDurationMs(value: string): number | null {
   return Number.isSafeInteger(Math.round(total)) && total > 0 ? Math.round(total) : null;
 }
 
-/** Validate a static finite DASH MPD. Acquisition targeting remains deferred. */
+/** Validate a static finite DASH MPD; defer acquisition targeting */
 export function validateStaticDashManifest(
   manifest: string,
   budget: TimelineValidationBudget = {},
@@ -192,7 +191,7 @@ export function validateStaticDashManifest(
   return positiveDuration(durationMs, "dash");
 }
 
-/** Metadata duration is retained for comparison; validated transport duration wins. */
+/** Keep metadata duration for comparison; use validated transport duration */
 export function admitValidatedTimeline(
   metadataDurationMs: number | null,
   validated: FiniteTimeline,

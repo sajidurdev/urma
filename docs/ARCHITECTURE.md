@@ -1,9 +1,11 @@
 # Architecture
 
-Urma is an MCP adapter around a deterministic evidence service. The host
-chooses the question and the next observation. Urma resolves the source,
-acquires bounded media or captions, validates the result, stores provenance,
-and records what the investigation received.
+<p align="center">
+  <img src="assets/architecture.png" alt="Urma architecture" width="100%" />
+</p>
+
+The MCP server routes requests to `EvidenceService`, which resolves sources,
+acquires bounded captions or media, validates results, and records provenance.
 
 ## Runtime shape
 
@@ -32,9 +34,6 @@ The server exposes five tools and two resource templates. `stdio.ts` owns the
 MCP transport and shuts down the application on input close or process
 termination. Protocol messages use stdout. Opt-in diagnostics use stderr and,
 when configured, a JSONL file.
-
-There is no semantic ranking, planner, media analyst, or model call inside
-Urma. Those responsibilities remain with the MCP host.
 
 ## Distribution and startup
 
@@ -284,10 +283,9 @@ Source is not an investigation.
 Cache is not presented evidence.
 Transport is not evidence.
 Evidence presentation is investigation-scoped.
-Every artifact has source, revision, producer, and content provenance.
-Every expensive operation has a bounded budget and deadline.
-Every cache promotion is validated and atomic.
-Every failure remains explicit.
+Remote acquisitions and subprocesses use configured limits. Blob promotion
+validates content before atomic rename. MCP failures and cadence slots retain
+explicit error codes or statuses.
 MCP stdout remains protocol-only.
 ```
 

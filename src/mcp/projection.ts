@@ -132,12 +132,7 @@ function compactSchedule(output: ModelRecord): void {
   }
 }
 
-/**
- * Convert a validated rich EvidenceService record into the compact object
- * registered for MCP. This is intentionally deterministic and keeps every
- * identity, timestamp, completeness, pagination, provenance, and reopenable
- * artifact reference needed by a host model.
- */
+/** Convert a validated service record to the deterministic public MCP shape */
 export function projectMcpOutput(raw: ModelRecord): ModelRecord {
   const identity = identityFrom(raw);
   const output = without(raw, ["stateSummary"]);

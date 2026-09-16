@@ -288,7 +288,6 @@ export function deriveInvestigationState(
           });
         }
       } catch {
-        /* tolerate malformed presentation metadata */
       }
     }
     if (entry.evidenceKind === "transcript_search") transcriptSearches += 1;

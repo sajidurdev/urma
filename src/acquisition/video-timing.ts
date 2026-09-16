@@ -143,7 +143,7 @@ function buildCoverage(
   };
 }
 
-/** Parse the selected video stream's retained presentation-time coverage. */
+/** Parse retained presentation-time coverage from the selected video stream */
 export function parseVideoStreamCoverage(
   stream: Readonly<Record<string, unknown>>,
 ): VideoPtsCoverage | null {
@@ -188,8 +188,8 @@ export function parseVideoStreamCoverage(
         timeBase.rational.denominator,
       )
       : null;
-  // An absent presentation origin cannot establish a source-to-media mapping.
-  // In particular, do not turn unknown origin into a zero-origin seek.
+  // An absent presentation origin cannot map source time to media
+  // Do not turn an unknown origin into a zero-origin seek
   const start = preciseStart ?? parseDecimal(stream.start_time);
   const duration = preciseDuration ?? parseDecimal(stream.duration);
   if (
@@ -207,7 +207,7 @@ export function parseVideoStreamCoverage(
   });
 }
 
-/** Parse the retained PTS-aware producer fields shared by exact media paths. */
+/** Parse retained PTS-aware producer fields for exact media paths */
 export function parseStoredVideoCoverage(
   producer: Readonly<Record<string, unknown>>,
 ): VideoPtsCoverage | null {
@@ -253,8 +253,8 @@ export function parseStoredVideoCoverage(
     }
   }
 
-  // An artifact that advertises precise fields must remain precise. Do not
-  // silently downgrade malformed PTS metadata to rounded display seconds.
+  // An artifact advertising precise fields must remain precise
+  // Do not silently downgrade malformed PTS metadata to rounded display seconds
   if (hasPrecisePtsMetadata) return null;
 
   const start = parseDecimal(producer.validatedVideoStartTime) ??
@@ -270,7 +270,7 @@ export function parseStoredVideoCoverage(
   });
 }
 
-/** Parse the current PTS-aware bounded-section producer contract. */
+/** Parse the bounded-section PTS-aware producer contract */
 export function parseStoredBoundedVideoCoverage(
   producer: Readonly<Record<string, unknown>>,
 ): VideoPtsCoverage | null {
@@ -300,7 +300,7 @@ export function isTimestampCovered(
 ): boolean {
   if (!Number.isSafeInteger(nominalLocalMs) || nominalLocalMs < 0) return false;
   const target = rational(BigInt(nominalLocalMs), 1_000n)!;
-  // The range is exact: the first retained presentation timestamp is included and the end is exclusive.
+  // Include the first retained presentation timestamp and exclude the end
   return (
     compare(target, coverage.start) >= 0 && compare(target, coverage.end) < 0
   );

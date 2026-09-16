@@ -180,7 +180,7 @@ function ipv6IsForbidden(value: string): boolean {
   return false;
 }
 
-/** Validate a literal address after DNS resolution inside the Safe Proxy. */
+/** Validate a literal address after Safe Proxy DNS resolution */
 export function assertResolvedRemoteAddressAllowed(address: string): void {
   const version = isIP(address);
   if (version === 4 && !ipv4IsForbidden(address)) return;
@@ -200,7 +200,7 @@ function hostnameIsForbidden(hostname: string): boolean {
     normalized.endsWith(".home.arpa");
 }
 
-/** Validate URL syntax before a proxy connection is attempted. */
+/** Validate URL syntax before opening a proxy connection */
 export function assertRemoteTargetAllowed(target: RemoteTarget): URL {
   let parsed: URL;
   try {
@@ -243,7 +243,7 @@ export function assertSubresourceTargetAllowed(
   return assertRemoteTargetAllowed({ url, purpose });
 }
 
-/** Proxy variables are deliberately absent from child environments. */
+/** Keep proxy variables out of child environments */
 export function assertNoProxyEnvironment(environment: NodeJS.ProcessEnv): void {
   const proxyNames = [
     "HTTP_PROXY",
@@ -386,9 +386,8 @@ export class SafeProxy {
       );
       server.maxConnections = this.#options.maxConnections;
       server.headersTimeout = this.#options.connectionTimeoutMs;
-      // CONNECT becomes a long-lived TLS tunnel. Its lifetime is bounded by
-      // the owning subprocess/session deadline, not by an HTTP request-body
-      // timeout that would tear down an otherwise healthy media transfer.
+      // A CONNECT tunnel can outlive the HTTP request body
+      // Bound it by the owning subprocess/session deadline
       server.requestTimeout = 0;
       server.keepAliveTimeout = 5_000;
       server.on("connect", (request, client, head) => {

@@ -28,7 +28,7 @@ export function validateFixedCadenceSchedule(
   return schedule;
 }
 
-/** Count without adding cadence or using a potentially overflowing span+cadence expression. */
+/** Count targets without an overflowing span-plus-cadence expression */
 export function fixedCadenceTargetCount(
   schedule: FixedCadenceSchedule,
   durationMs?: number,
@@ -45,7 +45,7 @@ export function fixedCadenceTargetCount(
   return Number(count);
 }
 
-/** Derive a target from the original schedule start and index. */
+/** Derive a target from the original schedule start and index */
 export function fixedCadenceTargetAt(
   schedule: FixedCadenceSchedule,
   index: number,

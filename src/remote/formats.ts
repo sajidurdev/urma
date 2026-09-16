@@ -13,9 +13,8 @@ const VIDEO_EXTENSIONS = new Set([
 ]);
 
 /**
- * yt-dlp's direct-media records can omit vcodec even when the record is a
- * video container. Keep that safe, conservative fallback in one place so
- * policy, snapshots, and timeline admission agree about what is video.
+ * Direct-media records may omit vcodec for video containers
+ * Keep the fallback in one place so policy, snapshots, and timeline checks agree
  */
 export function videoCodecForFormat(
   format: Readonly<Record<string, unknown>>,

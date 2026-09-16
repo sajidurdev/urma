@@ -1,5 +1,9 @@
 # Evidence model
 
+<p align="center">
+  <img src="assets/evidence-model.png" alt="Urma evidence model" width="100%" />
+</p>
+
 Urma reports what it acquired and presented for one investigation. The
 returned records describe bounded observations; they do not turn a sample,
 caption match, or cache entry into a claim about the whole source.

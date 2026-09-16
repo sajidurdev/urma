@@ -301,7 +301,6 @@ export class OverviewAcquirer {
           };
         }
       } catch {
-        // Invalid or corrupt cached material is regenerated through the normal path.
       }
     }
 

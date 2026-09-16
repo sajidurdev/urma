@@ -91,7 +91,7 @@ export async function downloadAndVerifyArtifact(
     try {
       await handle?.close();
     } catch {
-      // The original acquisition error is more useful to the caller.
+      // Keep the original acquisition error
     }
     if (!verified) await rm(destination, { force: true }).catch(() => undefined);
   }

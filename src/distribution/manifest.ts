@@ -165,8 +165,7 @@ function profile(): YtDlpInvocationProfile {
       "--no-cookies",
       "--no-cookies-from-browser",
     ],
-    // yt-dlp 2026.08.19 does not advertise --no-netrc. Netrc is disabled by
-    // omitting --netrc while --ignore-config blocks ambient configuration.
+    // yt-dlp has no --no-netrc flag; --ignore-config blocks ambient netrc settings
     unsupportedFlags: ["--no-netrc"],
   };
 }

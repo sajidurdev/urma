@@ -554,9 +554,7 @@ test("timeout and cancellation terminate descendant process trees", async (t) =>
     for (const pid of childPids) {
       try {
         process.kill(pid, "SIGKILL");
-      } catch {
-        /* already reaped */
-      }
+      } catch {}
     }
   });
   const alive = (pid: number) => {

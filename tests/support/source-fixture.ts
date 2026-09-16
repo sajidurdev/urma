@@ -13,7 +13,7 @@ export type TestSourceInput = Readonly<{
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
-/** Store compact test fixtures through the immutable snapshot API. */
+/** Store compact test fixtures through the immutable snapshot API */
 export function putTestSource(
   store: UrmaStore,
   source: TestSourceInput,

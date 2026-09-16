@@ -610,11 +610,7 @@ const modelIdentity = {
   stateResource: z.string().max(256),
 };
 
-/**
- * Rich evidence schemas above remain the internal service-validation contract.
- * These public projections deliberately describe only the compact object sent
- * through MCP after the rich record has been validated.
- */
+/** Rich schemas validate internal records; public schemas cover the compact MCP projection */
 export const inspectMcpOutput = inspectOutput.omit({ stateSummary: true });
 
 const singleSearchMcpOutput = singleSearchOutput

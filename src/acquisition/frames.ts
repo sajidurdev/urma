@@ -157,12 +157,7 @@ export class FrameAcquirer {
     });
   }
 
-  /**
-   * Return one outcome per requested target while retaining successful siblings
-   * when a target-specific failure occurs. Cancellation remains request-wide and
-   * is still thrown so the caller does not mistake interruption for a terminal
-   * target error.
-   */
+  /** Keep successful sibling targets when one target fails; cancellation aborts the request */
   async getOutcomes(
     source: ResolvedSource,
     ref: InvestigationRef,
@@ -260,7 +255,6 @@ export class FrameAcquirer {
             results.push({ atMs, artifact, cacheHit: true });
             cacheHit = true;
           } catch {
-            /* reacquire */
           }
         }
       } finally {

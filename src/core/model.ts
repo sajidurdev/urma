@@ -9,7 +9,7 @@ import type {
 export type SourceKind = "local" | "remote";
 export type { RemoteIdentity } from "./ids.js";
 
-/** An immutable observation revision of one logical source. */
+/** An immutable observation revision of one logical source */
 export type SnapshotRevision = string;
 export type SnapshotRef = Readonly<{
   sourceRef: SourceRef;

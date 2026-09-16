@@ -46,7 +46,6 @@ async function resolveDependencyRoot(name: string, fromRoot: string, packageRoot
   try {
     physicalFrom = await realpath(fromRoot);
   } catch {
-    // The normal package-root candidate is checked below.
   }
   const candidates: string[] = [];
   let current = physicalFrom;
@@ -63,7 +62,6 @@ async function resolveDependencyRoot(name: string, fromRoot: string, packageRoot
       if (!info.isDirectory()) continue;
       return await findPackageRoot(candidate);
     } catch {
-      // Try the next package resolution location.
     }
   }
   try {
@@ -153,7 +151,7 @@ export async function copyNpmRuntime(stageGenerationDir: string): Promise<Copied
   await cp(sourceDist, path.join(runtime, "src"), { recursive: true, dereference: true, errorOnExist: true, force: false });
   const packageJson = await readPackageJson(packageRoot);
   const sanitized = {
-    name: typeof packageJson.name === "string" ? packageJson.name : "@urma/mcp",
+    name: typeof packageJson.name === "string" ? packageJson.name : "urma-mcp",
     version: typeof packageJson.version === "string" ? packageJson.version : "0.0.0",
     type: "module",
     engines: packageJson.engines ?? { node: ">=24 <25" },

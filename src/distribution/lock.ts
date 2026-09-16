@@ -28,7 +28,7 @@ function isAlive(pid: number): boolean {
   } catch (error) {
     if (isNoSuchProcess(error)) return false;
     if (error instanceof Error && "code" in error && error.code === "EINVAL") return false;
-    // EPERM means the process exists but is not signalable by this user.
+    // EPERM means the process exists but this user cannot signal it
     if (error instanceof Error && "code" in error && error.code === "EPERM") return true;
     return true;
   }
@@ -135,8 +135,7 @@ export async function acquireInstallationLock(paths: DistributionPaths): Promise
           detail: { lockPath: paths.lock, pid: current.pid },
         });
       }
-      // Quarantine by rename so a new writer that wins the race cannot have
-      // its newly-created lock file removed by this stale-lock cleanup.
+      // Rename the stale lock first so a concurrent writer's new lock is not removed
       const quarantine = `${paths.lock}.stale-${randomUUID()}`;
       try {
         await rename(paths.lock, quarantine);

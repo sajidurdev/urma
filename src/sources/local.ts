@@ -147,7 +147,7 @@ export function parseLocalSnapshot(value: unknown): LocalSnapshot | null {
   return { version: "local-snapshot-v1", video, caption };
 }
 
-/** Capture the admitted local bundle into immutable, content-addressed blobs. */
+/** Pin the admitted local bundle as immutable, content-addressed blobs */
 export async function pinLocalBundle(
   identity: LocalBundleIdentity,
   blobs: Pick<BlobStore, "putFile">,
@@ -159,7 +159,7 @@ export async function pinLocalBundle(
   return { identity, video, caption };
 }
 
-/** Resolve a retained local video blob or fail closed if its snapshot is absent. */
+/** Resolve the retained local video blob or fail closed */
 export async function verifyPinnedLocalVideo(
   value: unknown,
   blobs: Pick<BlobStore, "verify">,
@@ -183,7 +183,7 @@ export async function verifyPinnedLocalVideo(
   }
 }
 
-/** Derive a local revision from admitted bytes and selected sidecar state. */
+/** Derive a local revision from video and sidecar content */
 export function localSnapshotRevision(bundle: PinnedLocalBundle): string {
   const caption = bundle.caption === null
     ? null

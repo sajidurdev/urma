@@ -16,7 +16,7 @@ async function main() {
     if (!hasPersistentRuntime) {
       throw new UrmaError(
         "INSTALLATION_MISSING",
-        "No persisted Urma generation is selected; run npx -y @urma/mcp@latest setup, then configure your MCP host with the absolute Node executable and launcher-v1.mjs",
+        "No persisted Urma generation is selected; run npx -y urma-mcp@latest setup, then configure your MCP host with the absolute Node executable and launcher-v1.mjs",
       );
     }
     await startStdioServer();

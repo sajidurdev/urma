@@ -166,8 +166,7 @@ async function materializeTools(
   const extracted = new Map<string, string>();
   const merged = new Set<string>();
   for (const artifact of artifacts) {
-    // Identical content hashes can be shared between ffmpeg/ffprobe entries
-    // for one qualified build, regardless of their metadata URL spelling.
+    // Share archives by content hash, even when manifest URLs differ
     const key = `${artifact.archiveSha256}\0${artifact.archiveFormat}`;
     const keyToken = createHash("sha256").update(key).digest("hex").slice(0, 16);
     let archive = downloaded.get(key);
@@ -374,9 +373,8 @@ export async function setup(options: SetupOptions = {}): Promise<SetupResult> {
   if (!path.isAbsolute(nodeExecutable) || nodeExecutable.includes("\0")) throw new UrmaError("SETUP_FAILED", "Setup requires an absolute existing Node executable");
   let nodeInfo;
   try {
-    // The external Node installation may be exposed through a user-owned
-    // symlink (common with version managers); validate the resolved target
-    // while retaining process.execPath in the receipt and host config.
+    // Validate the resolved target of a user-owned Node symlink
+    // Keep process.execPath in the receipt and host config
     nodeInfo = await stat(nodeExecutable);
   } catch (error) {
     throw new UrmaError("SETUP_FAILED", `Node executable ${nodeExecutable} does not exist; rerun setup with supported Node 24`, { cause: error });
@@ -405,8 +403,8 @@ export async function setup(options: SetupOptions = {}): Promise<SetupResult> {
       current = await readActive(paths);
     } catch (error) {
       if (errorCode(error) !== "INSTALLATION_CORRUPT") throw error;
-      // A healthy new generation can repair a malformed selector. The old
-      // bytes remain untouched until the final atomic selector commit.
+      // Repair a malformed selector only after the new generation is healthy
+      // Commit the new selector last so the old bytes remain untouched
       selectorCorrupt = true;
       current = null;
     }

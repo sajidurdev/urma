@@ -49,7 +49,7 @@ function parsedJson(result: ProcessResult, label: string): Record<string, unknow
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("not an object");
     return value as Record<string, unknown>;
   } catch (error) {
-    throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", `${label} did not return valid JSON during offline qualification`, { cause: error });
+    throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", `${label} did not return valid JSON during local native qualification`, { cause: error });
   }
 }
 
@@ -58,7 +58,7 @@ function videoDimensions(value: Record<string, unknown>, label: string): { width
   const stream = streams.find((item) => typeof item === "object" && item !== null && (item as Record<string, unknown>).codec_type === "video") as Record<string, unknown> | undefined;
   const width = stream?.width;
   const height = stream?.height;
-  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || (width as number) < 1 || (height as number) < 1) throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", `${label} returned no valid video dimensions during offline qualification`);
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || (width as number) < 1 || (height as number) < 1) throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", `${label} returned no valid video dimensions during local native qualification`);
   return { width: width as number, height: height as number };
 }
 
@@ -281,13 +281,17 @@ export async function persistedRuntimeMcpSmoke(
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })}\n`);
     const listed = await mcpExchange(child, messages, 2, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
     const tools = (listed.result as { tools?: unknown } | undefined)?.tools;
-    if (!Array.isArray(tools) || !tools.some((item) => typeof item === "object" && item !== null && (item as Record<string, unknown>).name === "inspect_video")) throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", "Persisted runtime MCP tools/list did not expose inspect_video");
+    const expectedTools = ["inspect_video", "search_transcript", "read_transcript", "get_overview", "get_frames"];
+    const toolNames = new Set(Array.isArray(tools)
+      ? tools.filter((item) => typeof item === "object" && item !== null && typeof (item as Record<string, unknown>).name === "string").map((item) => (item as Record<string, unknown>).name as string)
+      : []);
+    if (!Array.isArray(tools) || expectedTools.some((name) => !toolNames.has(name))) throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", `Persisted runtime MCP tools/list did not expose all five Urma tools; missing ${expectedTools.filter((name) => !toolNames.has(name)).join(", ")}`);
     const local = await mcpExchange(child, messages, 3, {
       jsonrpc: "2.0", id: 3, method: "tools/call",
       params: { name: "inspect_video", arguments: { source: fixture, freshness: "refresh" } },
     });
     if (local.error !== undefined || (local.result as { isError?: unknown } | undefined)?.isError === true) throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", `Persisted runtime local inspect_video operation failed${stderr ? `: ${stderr.slice(-500)}` : ""}`);
-    return ["persisted-runtime-mcp-initialize", "persisted-runtime-tools-list", "persisted-runtime-local-inspect"];
+    return ["persisted-runtime-mcp-initialize", "persisted-runtime-all-five-tools", "persisted-runtime-local-inspect"];
   } catch (error) {
     if (error instanceof UrmaError) throw error;
     throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", "Persisted runtime MCP smoke test failed", { cause: error });

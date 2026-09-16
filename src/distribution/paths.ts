@@ -189,9 +189,8 @@ async function nearestExistingDirectory(start: string): Promise<string> {
 }
 
 /**
- * This is deliberately conservative. Existing paths must be directories and
- * owned by the executing user where the platform exposes ownership. New roots
- * are checked through their nearest existing parent before setup creates them.
+ * Check existing roots and their nearest parents before creating directories
+ * Verify user ownership where the platform exposes it
  */
 export async function assertUserOwnedDataRoot(rootInput: string): Promise<string> {
   const root = assertSafeLocalPath(rootInput, "Urma data directory");

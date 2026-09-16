@@ -1,13 +1,13 @@
 import { UrmaError } from "../core/errors.js";
 import type { SafeProxy } from "./egress.js";
 
-/** The supported local remote-network boundary. */
+/** Supported local boundary for remote network operations */
 export type RemoteAcquisitionBoundary = "safe-proxy";
 
 /**
- * A process-local remote operation session. The approved child binaries remain
- * trusted; this context only guarantees that supported network operations are
- * configured with Urma's destination-filtering Safe Proxy.
+ * Process-local remote operation context
+ * Approved child binaries remain trusted
+ * Supported network calls use Urma's destination-filtering Safe Proxy
  */
 export type RemoteOperationContext = Readonly<{
   safeProxy: Pick<SafeProxy, "start">;

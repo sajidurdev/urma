@@ -116,7 +116,7 @@ type BatchDiagnostics = {
 const SECTION_PREFIX = "URMA_SECTION\t";
 const SECTION_OUTPUT_TEMPLATE =
   "media-%(section_start)010.3f-%(section_end)010.3f.%(ext)s";
-// yt-dlp section metadata is serialized in seconds while Urma identities are integer milliseconds.
+// yt-dlp sections use seconds; Urma identities use integer milliseconds
 const SECTION_METADATA_TOLERANCE_MS = 1;
 
 function targetedDerivativeUnavailable(
@@ -184,10 +184,7 @@ function formatIdentity(
   };
 }
 
-/**
- * Describe the representation selected by the existing exact-frame transport
- * policy without changing that policy or performing any media work.
- */
+/** Describe the selected exact-frame transport representation without acquiring media */
 export function frameEvidenceRepresentation(
   config: UrmaConfig,
   source: ResolvedSource,
@@ -339,7 +336,7 @@ function compatibilityKey(
   ]);
 }
 
-/** Stable request-local grouping over every property represented by the current bounded yt-dlp policy. */
+/** Group section requests by the effective bounded-section acquisition key */
 export function groupCompatibleSectionRequirements(
   config: UrmaConfig,
   requirements: readonly SectionBatchRequirement[],
@@ -376,7 +373,6 @@ function parseSectionEmissions(stdout: Buffer): SectionEmission[] {
         emissions.push({ sectionStartMs, sectionEndMs, filepath });
       }
     } catch {
-      /* malformed metadata is unresolved */
     }
   }
   return emissions;
@@ -1230,7 +1226,6 @@ export class MediaAcquirer {
             cacheHit: true,
           };
         } catch {
-          /* reacquire corrupt cache */
         }
       }
     } finally {

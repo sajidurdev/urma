@@ -90,7 +90,7 @@ export function createSnapshotRevision(now = Date.now()): string {
   return `v1:${now.toString(36)}:${randomUUID().replaceAll("-", "")}`;
 }
 
-/** Normalize a validated YouTube video ID to the generic remote identity shape. */
+/** Normalize a validated YouTube video ID to the generic remote identity shape */
 export function youtubeRemoteIdentity(videoId: string): RemoteIdentity {
   if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
     throw new TypeError(
