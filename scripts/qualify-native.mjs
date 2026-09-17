@@ -104,6 +104,18 @@ function safeSlug(value) {
   return value.replace(/[^A-Za-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "") || "command";
 }
 
+function npmInvocation() {
+  if (process.platform !== "win32") return { executable: "npm", args: [] };
+  const npmExecPath = process.env.npm_execpath;
+  if (typeof npmExecPath === "string" && path.isAbsolute(npmExecPath)) {
+    return { executable: process.execPath, args: [npmExecPath] };
+  }
+  return {
+    executable: process.execPath,
+    args: [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")],
+  };
+}
+
 function contained(root, child) {
   const relative = path.relative(path.resolve(root), path.resolve(child));
   return relative !== "" &&
@@ -350,17 +362,18 @@ function inspectBinaryBytes(buffer, label) {
     };
   }
 
-  const fatLittle = magicLe === 0xcafebabe || magicLe === 0xbebafeca;
-  const fatBig = magicBe === 0xcafebabe || magicBe === 0xbebafeca;
+  const fatLittle = magicLe === 0xcafebabe || magicLe === 0xcafebabf;
+  const fatBig = magicBe === 0xcafebabe || magicBe === 0xcafebabf;
   if (fatLittle || fatBig) {
     const littleEndian = fatLittle;
     const fatMagic = littleEndian ? magicLe : magicBe;
     const count = readU32(buffer, 4, littleEndian);
     assert(count <= 32, `${label} has an unreasonable Mach-O fat architecture count`);
+    const entrySize = fatMagic === 0xcafebabf ? 32 : 20;
     const architectures = [];
     for (let index = 0; index < count; index += 1) {
-      const offset = 8 + index * 20;
-      assert(offset + 20 <= buffer.length, `${label} has a truncated Mach-O fat header`);
+      const offset = 8 + index * entrySize;
+      assert(offset + entrySize <= buffer.length, `${label} has a truncated Mach-O fat header`);
       architectures.push(machCpuName(readI32(buffer, offset, littleEndian)));
     }
     return {
@@ -531,12 +544,13 @@ async function runManagedToolChecks(report, resultDir, packageRoot, managed, man
   const versionResults = {};
   for (const kind of TOOL_KINDS) {
     const tool = managed.tools[kind];
+    const versionArgs = kind === "ytdlp" ? ["--version"] : ["-version"];
     const result = await runLogged(
       report,
       resultDir,
       `managed-${kind}-version`,
       tool.executable,
-      ["--version"],
+      versionArgs,
       { cwd: managed.generationDir, env: environment, timeoutMs: 60_000 },
     );
     requireSuccess(result, `managed ${kind} version`);
@@ -1096,13 +1110,13 @@ async function main() {
     };
 
     const npmEnvironment = { ...process.env, npm_config_audit: "false", npm_config_fund: "false", npm_config_update_notifier: "false" };
-    const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+    const npm = npmInvocation();
     const npmInstall = await runLogged(
       report,
       resultDir,
       "install-packed-npm-release",
-      npmCommand,
-      ["install", "--no-save", "--no-package-lock", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", bootstrapRoot, packageTarball],
+      npm.executable,
+      [...npm.args, "install", "--no-save", "--no-package-lock", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", bootstrapRoot, packageTarball],
       { cwd: tempRoot, env: npmEnvironment, timeoutMs: 10 * 60_000 },
     );
     requireSuccess(npmInstall, "npm install of packed release");
