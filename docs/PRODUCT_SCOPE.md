@@ -8,10 +8,8 @@ Urma is a local-first MCP server for acquiring bounded video evidence. It
 resolves a source, pins a finite timeline, acquires source-provided captions or
 video, validates the result, and records provenance for each investigation.
 
-The MCP host owns query formulation, reasoning, semantic interpretation,
-temporal hypotheses, and the decision that the evidence is sufficient.
-
-This document defines the v0.1 product boundary.
+The MCP host chooses requests, interprets the returned evidence, and decides
+whether it supports a conclusion.
 
 ## Included in v0.1
 
@@ -37,8 +35,8 @@ private, login-required, paywalled, and DRM-protected sources are rejected.
   selected caption track.
 - `read_transcript` returns timestamped caption segments from a bounded
   source-global interval.
-- `get_overview` returns a sparse 12-cell visual locator for the whole source
-  or a validated interval.
+- `get_overview` returns a sparse visual locator with up to 12 cells for the
+  whole source or a validated interval.
 - `get_frames` returns exact JPEG points, ordered sparse burst points, or a
   paged fixed-cadence set of exact point requests.
 - Investigation-scoped MCP resources reopen presented artifacts and expose
@@ -75,8 +73,7 @@ The npm entry point starts MCP stdio only after the persistent runtime has been
 selected. The persistent `launcher-v1.mjs` starts that runtime and accepts
 `doctor`, `rollback`, and `recover`. Run those commands through the launcher
 with the Node executable and data root selected by setup. `setup` must run from
-the npm release; the launcher rejects it. No `prune` command is exposed by the
-current CLI or launcher.
+the npm release; the launcher rejects it.
 
 Setup can register a generic JSON host entry. Registration uses the absolute
 Node executable recorded by setup, the absolute `launcher-v1.mjs` path, and
@@ -110,9 +107,9 @@ Urma v0.1 does not include:
 
 Opt-in development diagnostics are available on stderr through `URMA_DEBUG`.
 They can also be appended to a caller-selected JSONL file with
-`URMA_DEBUG_FILE`. Diagnostics do not expand the evidence surface.
+`URMA_DEBUG_FILE` when `URMA_DEBUG` is enabled.
 
 ## Scope boundary
 
-Before adding a public MCP operation, define its input scope, output identity,
-completeness, failure behavior, and negative guarantee.
+For a proposed MCP operation, specify its inputs, returned evidence, limits,
+errors, and what the result cannot establish.

@@ -3,7 +3,7 @@
 <div align="center">
   <img src="assets/urma-banner.png" alt="Urma" width="100%" />
   <br /><br />
-  <strong>Deterministic, local-first video evidence acquisition over MCP.</strong>
+  <strong>Retrieve video captions and frames through MCP.</strong>
   <br />
   A stdio MCP server for bounded caption and visual evidence.
   <br /><br />
@@ -20,9 +20,13 @@
 
 <br />
 
-Urma resolves a finite video source, records the resolution snapshot, and
-returns bounded caption or visual evidence with provenance. The MCP host owns
-the questions, reasoning, and final interpretation.
+Urma retrieves captions and sampled frames from videos with a known end time.
+Each result identifies its source snapshot and requested timestamps or range.
+The MCP host chooses what to retrieve and interprets the results.
+
+Urma runs locally and stores its cache on your filesystem. Remote videos still
+require network access. The host receives the requested evidence and controls
+how it is processed or sent to a model.
 
 Urma exposes five tools:
 
@@ -31,7 +35,7 @@ Urma exposes five tools:
 | `inspect_video` | A source snapshot and a new investigation reference. |
 | `search_transcript` | Literal matches in one selected caption track. |
 | `read_transcript` | Timestamped caption segments in a bounded interval. |
-| `get_overview` | A 12-cell sparse visual locator. |
+| `get_overview` | A visual overview with up to 12 sampled cells. |
 | `get_frames` | Exact JPEG points, ordered sparse points, or a fixed-cadence schedule. |
 
 The server uses MCP stdio. A host starts one Urma process for a session and
@@ -58,8 +62,9 @@ Run the npm bootstrap with Node.js 24:
 npx -y urma-mcp@latest setup
 ```
 
-Setup downloads the release-manifest artifacts, verifies them, runs native and
-persisted-runtime MCP qualification, and publishes a complete immutable
+Setup downloads and verifies the pinned native tools, checks that the installed
+runtime can serve MCP requests, and selects the new installation for future
+launches. Each installation is stored in a separate directory called a
 generation. If setup fails during an update, the previously active generation
 remains selected.
 
@@ -67,7 +72,7 @@ The default data roots are:
 
 | Platform | Root |
 | --- | --- |
-| Windows | `%LOCALAPPDATA%\\Urma` |
+| Windows | `%LOCALAPPDATA%\Urma` |
 | macOS | `~/Library/Application Support/Urma` |
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/urma` |
 
@@ -119,10 +124,11 @@ stdio entry with the same absolute Node executable, launcher path, and
 
 Call `inspect_video` first for a new source. It accepts an HTTP(S) URL, an
 allowed local path, or a previously returned `sourceRef`. It rejects sources
-that do not define one finite video timeline. The default
-`freshness: "reuse"` uses the latest stored snapshot. Set
-`freshness: "refresh"` to resolve the source again instead of reusing the
-latest snapshot. Every later tool call uses the returned `investigationRef`.
+that do not define one finite video timeline. The default `freshness: "reuse"`
+reuses a stored snapshot for a known remote URL or `sourceRef`. A local path
+is read again to check the video and sidecar content. Set `freshness: "refresh"`
+to resolve the source again. Every evidence request then uses the returned
+`investigationRef`.
 
 Use captions to locate likely time ranges, `get_overview` to locate visual
 moments, and `get_frames` to verify selected moments. These tools expose
@@ -134,9 +140,8 @@ different observations:
 - A cadence request is a finite list of exact point requests. It reports each
   page slot as `success`, `error`, or `unfinished`.
 
-All tool calls after inspection require the investigation reference. A source
-cache can be reused across investigations, but evidence presentation is
-recorded per investigation.
+A source cache can be reused across investigations, but evidence presentation
+is recorded per investigation.
 
 ### Source and caption inputs
 
@@ -157,7 +162,8 @@ matching caption is a lead for visual verification, not visual proof.
 
 `read_transcript` requires a source-global half-open interval,
 `[startMs,endMs)`. It returns at most 200 segments or 16,000 caption
-characters per page. Use `nextCursor` to continue a partial result.
+characters per page. To continue, pass `nextCursor` as `cursor` with the same
+investigation, interval, and selected track.
 
 ### Visual inputs
 
@@ -173,6 +179,11 @@ were observed; they do not describe continuous coverage.
 | `burst` | A half-open interval and 2–12 ordered samples. |
 | `cadence` | A half-open interval and a positive integer `cadenceMs`. |
 
+Times are nonnegative integer milliseconds from the start of the source.
+Intervals require `startMs < endMs` and must fit within its duration. An exact
+frame request asks for the first decodable frame at or after the target; it
+does not guarantee a frame with precisely that presentation timestamp.
+
 For `points` and `burst`, the default presentation is `individual`. Set
 `presentation: "panel"` to receive one derived JPEG panel plus links to the
 canonical frame artifacts. A panel contains at most 12 cells and preserves
@@ -182,6 +193,31 @@ Cadence requests are paged. The default page maximum is 12 targets and the
 default schedule maximum is 120 targets. Continue with the returned opaque
 `nextCursor`; do not construct a cursor yourself. A cadence schedule is
 discrete evidence and does not cover the time between its targets.
+
+### Example tool arguments
+
+For a local video, first add its parent directory to `URMA_LOCAL_ROOTS` in the
+host's Urma environment and restart the host. Call `inspect_video` with the
+absolute path to your file:
+
+```json
+{ "source": "/absolute/path/to/video.mp4" }
+```
+
+Use the returned `investigationRef` in subsequent calls. For example, these
+`get_frames` arguments request a panel at 1 and 5 seconds from a video longer
+than 5 seconds. Replace the example reference with the value from inspection:
+
+```json
+{
+  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
+  "request": { "kind": "points", "timesMs": [1000, 5000] },
+  "presentation": "panel"
+}
+```
+
+To continue a cadence page, pass `investigationRef` and the returned
+`nextCursor` as `cursor`, without a new `request`.
 
 ## Resources and errors
 
@@ -201,9 +237,10 @@ in an individual slot and continue with other targets.
 
 ## Evidence rules
 
-Results are bounded observations of the selected caption track and returned
-sample points. `partial: false` does not make matching or sparse sampling
-exhaustive. Reopening cached artifacts adds no coverage. See [Evidence Model](docs/EVIDENCE_MODEL.md).
+For caption search, `partial: false` means all matches under the selected
+track's matching rules were returned. It says nothing about uncaptioned
+speech or visual events. Sampled frames describe only the returned points,
+and reopening cached artifacts adds no coverage.
 
 See [Evidence Model](docs/EVIDENCE_MODEL.md) for the full contract.
 
@@ -249,7 +286,11 @@ positive integer. `URMA_MAX_FRAME_SCHEDULE_PAGE_TARGETS` cannot exceed 12.
 | `URMA_LOCAL_ROOTS` | Platform-delimited list of roots allowed for local videos and sidecars. |
 | `URMA_ALLOW_UNC` | Allows UNC paths when set to `1` or `true`; the path must still be under an allowed root. |
 | `URMA_DEBUG` | Writes opt-in acquisition and subprocess diagnostics to stderr when set to `1` or `true`. |
-| `URMA_DEBUG_FILE` | Appends those diagnostics to a caller-selected JSONL file. |
+| `URMA_DEBUG_FILE` | Appends diagnostics to a JSONL file when `URMA_DEBUG` is enabled. |
+
+Set these variables in the host's Urma `env` entry, then restart the host.
+Separate local roots with `;` on Windows and `:` on macOS/Linux. Use absolute
+paths so root selection does not depend on the host's working directory.
 
 The packaged launcher uses the selected generation's absolute native-tool
 paths. It does not look up FFmpeg, ffprobe, or yt-dlp through `PATH`.
@@ -266,19 +307,25 @@ npx -y urma-mcp@latest setup
 After setup, run the read-only doctor through the persistent launcher:
 
 ```sh
-/absolute/path/to/node /absolute/path/to/Urma/launcher-v1.mjs doctor
+"/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" doctor
+```
+
+In PowerShell, prefix the quoted executable path with `&`:
+
+```powershell
+& "C:\path\to\node.exe" "C:\path\to\Urma\launcher-v1.mjs" doctor
 ```
 
 Doctor checks the selected runtime, Node version, SQLite/FTS5, native-tool
 versions, storage, blob access, local roots, and frame-schedule limits. It
-prints its report to stderr and exits with status 0 when all checks pass, or 1
-when a check fails.
+prints its report to stderr and exits with status 0 when no check fails
+(warnings are allowed), or 1 when a check fails.
 
 The launcher also provides local generation recovery:
 
 ```sh
-/absolute/path/to/node /absolute/path/to/Urma/launcher-v1.mjs rollback
-/absolute/path/to/node /absolute/path/to/Urma/launcher-v1.mjs recover
+"/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" rollback
+"/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" recover
 ```
 
 `rollback` selects the retained previous generation after integrity and state
@@ -291,13 +338,9 @@ dependencies. A later setup affects new processes only.
 
 ## Boundaries
 
-Urma v0.1 acquires and presents bounded caption and visual evidence. It does
-not perform semantic media analysis, access restricted or live media, or
-provide account, cloud-sync, dashboard, indexing, or telemetry features. See
-[Product scope](docs/PRODUCT_SCOPE.md).
-
-The host decides what evidence to request and whether the returned evidence is
-enough for a conclusion.
+Urma v0.1 does not transcribe audio, recognize objects or actions, or call a
+model. It supports finite videos without authentication or DRM. See
+[Product scope](docs/PRODUCT_SCOPE.md) for supported sources and exclusions.
 
 ## Security
 
@@ -316,14 +359,26 @@ See [Security](docs/SECURITY.md) for the full boundary and failure behavior.
 
 ## Development
 
+Use Node.js 24 and the pnpm version declared in `package.json`. See the
+[development prerequisites](docs/CONTRIBUTING.md#development-setup) for native
+tools used by the tests. From the repository root:
+
 ```sh
-pnpm build
-pnpm exec tsc -p tsconfig.json --noEmit
-pnpm exec node --test dist/tests/unit/*.test.js
-pnpm exec node --test dist/tests/integration/*.test.js
+pnpm install --frozen-lockfile
+pnpm check
 ```
 
-Current coverage is defined by `tests/unit` and `tests/integration`.
+Contributions are welcome. Follow the [contribution guide](docs/CONTRIBUTING.md)
+for code structure, documentation standards, and pull request expectations.
+
+## License
+
+Urma is licensed under [Apache License 2.0](LICENSE). Third-party dependencies
+and downloaded native tools retain their own licenses. The installed
+generation's `licenses/` directory records native component licenses and
+upstream references; preserve the accompanying upstream notices when
+redistributing those tools. Urma's license does not grant rights to videos or
+captions retrieved from other sources.
 
 ## Documentation
 
@@ -331,4 +386,4 @@ Current coverage is defined by `tests/unit` and `tests/integration`.
 - [Architecture](docs/ARCHITECTURE.md) — runtime layers, persistence, caching, and acquisition decisions.
 - [Evidence Model](docs/EVIDENCE_MODEL.md) — what each result means and what it cannot establish.
 - [Security](docs/SECURITY.md) — path, network, subprocess, installation, and cache controls.
-- [Contribution](docs/CONTRIBUTING.md) — local setup, validation commands, and change expectations.
+- [Contributing](docs/CONTRIBUTING.md) — local setup, validation commands, and change expectations.

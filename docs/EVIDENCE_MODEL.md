@@ -79,9 +79,9 @@ The response distinguishes the requested interval from the observed samples:
 The example is schematic. A real response can contain up to 12 returned cells,
 and a short interval can produce fewer than 12 distinct points. The timestamps
 in `sampleTimestampsMs` are the cells returned by that call. Urma does not
-claim observation between adjacent points. `sampling.resolutionMs` is `null`
-because cell spacing is evidence metadata, not a guaranteed sampling
-resolution.
+claim observation between adjacent points. The public MCP response omits the
+internal `sampling.resolutionMs` field; sample spacing does not guarantee
+coverage between frames.
 
 An overview uses a native storyboard when available and otherwise decodes
 navigation media. Its artifact role is `locator`. Current overview producers
@@ -155,10 +155,10 @@ Each page retains the zero-based schedule index and one of these statuses:
 | `error` | That target failed; the slot contains `code`, `retryable`, and `detail`. |
 | `unfinished` | Work for that target did not finish in the current page. |
 
-The current schedule schema reports
-`selectedPresentationTimeMs: null` and timing status `unavailable` for every
-slot. The requested timestamp remains the schedule target; it is not a claim
-about a measured presentation PTS.
+The public MCP response omits each slot's internal `timing` record, which
+currently contains `selectedPresentationTimeMs: null` and status `unavailable`.
+The requested timestamp remains the schedule target; it is not a measured
+presentation timestamp (PTS).
 
 Use the returned `nextCursor` to continue. The cursor is opaque and signed; it
 is bound to the investigation, source snapshot, duration, frame
@@ -198,13 +198,14 @@ repair automatic captions, or infer speech that the source did not provide.
 
 ### Search
 
-`search_transcript` searches the entire selected track for a literal phrase or
-literal terms. The text and query are NFKC-normalized, lowercased, and cleaned
+`search_transcript` scans up to 10,000 segments of the selected track for a
+literal phrase or literal terms. The text and query are NFKC-normalized, lowercased, and cleaned
 so separators become spaces. Phrase mode checks for a normalized substring.
 Terms mode requires every normalized term to occur as a substring.
 
-A single-query hit contains the matching cue and up to three surrounding cues
-as context. The matching cue is not duplicated in the MCP context projection.
+A single-query hit contains the matching cue and up to one preceding and one
+following cue as context. The matching cue is not duplicated in the MCP
+context projection.
 For a batch, each query is matched independently and overlapping spans are
 merged in timestamp order. A batch hit records the queries that matched it.
 
@@ -270,9 +271,9 @@ urma://investigation/<investigationId>/state
 ```
 
 It is derived from persisted source, acquisition, cache, artifact, and
-presentation records. Compact tool summaries cap lists of gaps, ranges, and
-recent overviews. The state resource has a byte ceiling and is never silently
-truncated.
+presentation records. Tool responses provide its URI as `stateResource` and
+omit the internal `stateSummary`. A state resource larger than the configured
+byte ceiling fails to read rather than returning truncated JSON.
 
 ## What these results do not prove
 
@@ -286,6 +287,6 @@ truncated.
 - Cached or authorized content does not add new temporal coverage when it is
   reopened.
 
-For a conclusion that depends on exhaustive or counting claims, the host must
-obtain enough timeline coverage, verify transitions, and account for duplicate
-or repeated content.
+These tools do not establish exhaustive event counts. A host making such a
+claim needs evidence for unsampled intervals and a way to distinguish repeated
+observations from separate events.

@@ -5,7 +5,8 @@
     "url": "https://github.com/sajidurdev/urma.git"
   },
   "version": "0.1.0",
-  "description": "Deterministic local-first video evidence acquisition over MCP.",
+  "description": "Retrieve video captions and frames through a local MCP server.",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "urma": "./dist/src/cli/main.js"

@@ -71,9 +71,8 @@ each native tool is first used in a process, Urma verifies its installed file
 against the receipt hash. The result is cached for that process. A missing or
 modified executable fails the operation; there is no system-binary fallback.
 
-The receipt check establishes installation provenance. It does not claim that
-every executable hash is recomputed during launcher startup before a tool is
-used.
+The receipt records installation provenance; native-tool hash verification
+happens on first use in each process.
 
 ## Remote URL and network boundary
 
@@ -146,11 +145,12 @@ ceiling is rejected.
 
 Artifacts are stored by SHA-256. Blob writes use temporary files and atomic
 promotion. Reads verify the expected content-addressed path, size, and hash.
-If a cached artifact is missing or corrupt, Urma reacquires it instead of
-returning unverified bytes.
+Resource reads fail if an artifact is missing or corrupt. Acquisition paths
+can reacquire invalid cached artifacts; reopening a resource does not itself
+trigger acquisition.
 
-Equivalent deterministic operations use singleflight. Each caller has its own
-cancellation observer. Cancelling one observer does not cancel shared work
+Equivalent acquisitions share one in-flight operation. Each caller can cancel
+independently. Cancelling one caller does not cancel shared work
 still needed by another; shared work stops after the last observer detaches.
 
 ## Model-facing data boundary
@@ -161,8 +161,10 @@ returned in model-facing error text. Structured tool projections omit internal
 transport fields and raw resolver metadata.
 
 Caption text, media, metadata, and images are untrusted source data. Urma
-returns them as evidence data. It never treats their contents as instructions
-or lets them choose commands, paths, URLs, transport modes, or control flow.
+returns them as evidence data, not instructions for the host. Provider metadata
+can supply delivery and caption URLs; those URLs pass through the remote
+policy and network checks. The host must keep source content separate from
+instructions when interpreting the evidence.
 
 An artifact resource can be read only after the artifact has been presented to
 the requesting investigation. A cached artifact, an artifact presented to a
@@ -174,9 +176,7 @@ its operational records.
 
 ## Boundary of these controls
 
-Urma does not provide account isolation, hosted multi-tenant isolation, cloud
-storage, authentication, or an OS-level sandbox. It also does not make a
-general claim that an admitted video is safe to display or that captions are
-truthful. The controls establish how Urma validates source admission,
-installation contents, subprocess execution, bounded acquisition, and
-investigation-scoped artifact access.
+Investigation-scoped resource checks track presented evidence; they do not
+isolate different users. Urma has no authentication or hosted multi-tenant
+isolation. Source admission and media validation do not establish that captions
+are truthful or that a video is appropriate to display.

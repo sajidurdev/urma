@@ -87,12 +87,7 @@ Linux requires glibc. The data root must be a user-owned local filesystem path.
 
 ## Source identity and snapshots
 
-The resolver admits two source kinds:
-
-```text
-local
-remote
-```
+The resolver admits `local` and `remote` sources.
 
 YouTube is normalized as a remote source. A logical source reference identifies
 the source identity rather than a particular delivery URL:
@@ -137,20 +132,15 @@ absence. File statistics alone do not define the revision.
 (sourceRef, snapshotRevision, durationMs)
 ```
 
-Source-level cache and singleflight work can be reused. Presentations are
-recorded separately for each investigation. A new investigation starts with
+Source-level cache and in-flight work for equivalent requests can be reused.
+Presentations are recorded separately for each investigation. A new investigation starts with
 zero presented evidence even when the required bytes already exist in the
 cache.
 
-The normal evidence path is:
-
-1. Resolve or reuse a finite source snapshot.
-2. Choose and acquire one caption track when a transcript operation needs it.
-3. Acquire a 12-cell sparse overview for visual navigation when requested.
-4. Acquire exact frames at explicit points, ordered burst points, or fixed
-   cadence targets.
-5. Record the returned evidence and its resource authorization in the
-   investigation.
+After inspection, each tool independently acquires the requested caption track,
+overview, or frames and records the evidence presented to the investigation.
+Caption retrieval and overviews are optional; neither is required before a
+frame request.
 
 ### Captions
 
@@ -263,8 +253,9 @@ and TLS-preserving HTTPS `CONNECT`. It resolves DNS, validates every returned
 address, and dials the validated address directly. Each redirect, manifest,
 fragment, caption, storyboard, and delivery destination enters the same checks.
 
-Remote yt-dlp calls receive an internal hermetic argument profile and the Safe
-Proxy. Direct FFmpeg and ffprobe HTTP(S) inputs receive an explicit proxy and a
+Remote yt-dlp calls use fixed arguments that disable ambient configuration,
+plugins, and cookies, and route requests through the Safe Proxy. Direct FFmpeg
+and ffprobe HTTP(S) inputs receive an explicit proxy and a
 restricted protocol allowlist. Child environments are allowlisted, and proxy
 configuration is rejected from those environments. Native executables are
 generation-local and receipt-bound.
@@ -273,21 +264,8 @@ Subprocess output, media, manifests, and caption data have independent byte
 limits. Timeouts and cancellation terminate the process tree. A failed or
 cancelled acquisition does not create a successful cache record.
 
-Equivalent deterministic acquisitions use singleflight. Each observer can
-cancel independently. Shared work stops when no observer remains.
-
-## Invariants
-
-```text
-Source is not an investigation.
-Cache is not presented evidence.
-Transport is not evidence.
-Evidence presentation is investigation-scoped.
-Remote acquisitions and subprocesses use configured limits. Blob promotion
-validates content before atomic rename. MCP failures and cadence slots retain
-explicit error codes or statuses.
-MCP stdout remains protocol-only.
-```
+Equivalent acquisitions share one in-flight operation (singleflight). Each
+observer can cancel independently. Shared work stops when no observer remains.
 
 The public evidence contract, including coverage and completeness semantics,
 is defined in [Evidence Model](EVIDENCE_MODEL.md). The current release boundary
