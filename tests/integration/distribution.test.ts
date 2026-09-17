@@ -149,7 +149,10 @@ test("setup publishes an immutable generation, starts through the persistent lau
   assert(activeFirst);
   assert.equal(first.runtimeInstallation, "healthy");
   assert.equal(first.hostRegistration.status, "not-requested");
-  assert.equal((await runLauncher(root, ["--version"], { PATH: "" })).stdout, "0.1.0\n");
+  const packageJson = JSON.parse(
+    await readFile(path.resolve("package.json"), "utf8"),
+  ) as { version: string };
+  assert.equal((await runLauncher(root, ["--version"], { PATH: "" })).stdout, `${packageJson.version}\n`);
   const firstGeneration = path.join(root, "installs", activeFirst.active);
   assert.match(await readFile(path.join(firstGeneration, "receipt.json"), "utf8"), /fake-mcp/u);
   assert.match(await readFile(path.join(firstGeneration, "licenses", "THIRD-PARTY-NOTICES.txt"), "utf8"), /third-party distribution notices/iu);
