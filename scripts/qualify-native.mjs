@@ -631,7 +631,7 @@ async function runManagedToolChecks(report, resultDir, packageRoot, managed, man
 }
 
 async function generateLocalFixture(report, resultDir, managed, environment, localRoot) {
-  const fixture = path.join(localRoot, "fixture — 日本.nut");
+  const fixture = path.join(localRoot, "fixture — 日本.mp4");
   const result = await runLogged(
     report,
     resultDir,
@@ -643,7 +643,8 @@ async function generateLocalFixture(report, resultDir, managed, environment, loc
       "-i", "color=c=black:s=160x90:d=1:r=24",
       "-c:v", "mpeg4",
       "-q:v", "5",
-      "-f", "nut",
+      "-movflags", "+faststart",
+      "-f", "mp4",
       "-y", fixture,
     ],
     { cwd: managed.generationDir, env: environment, timeoutMs: 60_000 },
