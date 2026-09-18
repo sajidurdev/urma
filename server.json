@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.sajidurdev/urma",
+  "description": "Retrieve bounded video captions and frames through a local MCP server.",
+  "repository": {
+    "url": "https://github.com/sajidurdev/urma",
+    "source": "github"
+  },
+  "version": "0.1.0-rc.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "urma-mcp",
+      "version": "0.1.0-rc.2",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

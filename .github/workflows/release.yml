@@ -16,9 +16,6 @@ on:
 permissions:
   contents: read
 
-env:
-  NODE_VERSION: 24.21.0
-
 jobs:
   validate:
     name: Validate release request
@@ -26,6 +23,7 @@ jobs:
     outputs:
       release_type: ${{ steps.metadata.outputs.release_type }}
       version: ${{ steps.metadata.outputs.version }}
+      package_name: ${{ steps.metadata.outputs.package_name }}
       dist_tag: ${{ steps.metadata.outputs.dist_tag }}
       release_tag: ${{ steps.metadata.outputs.release_tag }}
     steps:
@@ -37,7 +35,7 @@ jobs:
       - name: Set up Node 24
         uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
           package-manager-cache: false
 
       - name: Validate branch, version, and tag state
@@ -45,42 +43,26 @@ jobs:
         shell: bash
         env:
           RELEASE_TYPE: ${{ inputs.release_type }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           node --input-type=module <<'NODE'
-          import { appendFileSync, readFileSync } from "node:fs";
+          import { appendFileSync } from "node:fs";
           import { spawnSync } from "node:child_process";
-          import path from "node:path";
 
-          const fail = (message) => {
-            throw new Error(message);
-          };
+          import { readMetadata, validateMetadata, assertPublishingIdentity, validateReleaseRequest } from "./scripts/validate-metadata.mjs";
+
+          const fail = (message) => { throw new Error(message); };
+          const { pkg: packageJson, server } = readMetadata();
+          const metadata = validateMetadata(packageJson, server);
+          assertPublishingIdentity(packageJson);
           const releaseType = process.env.RELEASE_TYPE;
-          if (!["test", "rc", "stable"].includes(releaseType)) {
-            fail(`Unsupported release type ${JSON.stringify(releaseType)}`);
-          }
-          if (releaseType !== "test" && process.env.GITHUB_REF_NAME !== "main") {
-            fail(`${releaseType} releases may run only from main; received ${process.env.GITHUB_REF_NAME}`);
-          }
-
-          const packagePath = path.join(
-            process.env.GITHUB_WORKSPACE ?? process.cwd(),
-            "package.json",
-          );
-          const packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
+          const values = { ...metadata, ...validateReleaseRequest(packageJson, {
+            releaseType,
+            defaultBranch: process.env.DEFAULT_BRANCH,
+            refType: process.env.GITHUB_REF_TYPE,
+            refName: process.env.GITHUB_REF_NAME,
+          }) };
           const version = packageJson.version;
-          if (typeof version !== "string" || version.length === 0) {
-            fail("package.json must contain a non-empty version string");
-          }
-          const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
-          const rcVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-rc\.(0|[1-9]\d*)$/u;
-          const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
-          if (!semver.test(version)) fail(`package.json version ${version} is not valid semver`);
-          if (releaseType === "rc" && !rcVersion.test(version)) {
-            fail(`rc releases require a version such as 0.1.0-rc.1; received ${version}`);
-          }
-          if (releaseType === "stable" && !stableVersion.test(version)) {
-            fail(`stable releases require a normal semver such as 0.1.0; received ${version}`);
-          }
 
           if (releaseType !== "test") {
             const tag = `v${version}`;
@@ -112,12 +94,6 @@ jobs:
 
           const output = process.env.GITHUB_OUTPUT;
           if (!output) fail("GITHUB_OUTPUT is unavailable");
-          const values = {
-            release_type: releaseType,
-            version,
-            dist_tag: releaseType === "test" ? "" : releaseType === "rc" ? "rc" : "latest",
-            release_tag: `v${version}`,
-          };
           for (const [key, value] of Object.entries(values)) {
             appendFileSync(output, `${key}=${value}\n`);
           }
@@ -143,7 +119,7 @@ jobs:
       - name: Set up Node 24
         uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
           package-manager-cache: false
 
       - name: Install media test dependencies
@@ -153,19 +129,7 @@ jobs:
           sudo apt-get install --no-install-recommends -y ffmpeg unzip
           ffmpeg -version
           ffprobe -version
-          ytdlp_archive="$RUNNER_TEMP/yt-dlp_linux.zip"
-          ytdlp_root="$RUNNER_TEMP/yt-dlp"
-          curl --fail --location --retry 3 --output "$ytdlp_archive" \
-            "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux.zip"
-          test "$(stat -c '%s' "$ytdlp_archive")" = "40516244"
-          echo "32e72032766bef9199d99d15beb69fd52e46df8f8b06f0d8745db59e04d339e9  $ytdlp_archive" | sha256sum --check --strict
-          mkdir -p "$ytdlp_root"
-          unzip -q "$ytdlp_archive" -d "$ytdlp_root"
-          mv "$ytdlp_root/yt-dlp_linux" "$ytdlp_root/yt-dlp"
-          chmod 0755 "$ytdlp_root/yt-dlp"
-          export PATH="$ytdlp_root:$PATH"
-          echo "$ytdlp_root" >> "$GITHUB_PATH"
-          yt-dlp --version
+          node scripts/prepare-ci-tools.mjs
 
       - name: Install locked dependencies
         shell: bash
@@ -186,6 +150,12 @@ jobs:
       - name: Integration tests
         shell: bash
         run: pnpm exec node --test dist/tests/integration/*.test.js
+
+      - name: Validate package and MCP metadata
+        run: node scripts/validate-metadata.mjs
+
+      - name: CI and release validation tests
+        run: node --test scripts/tests/*.test.mjs
 
       - name: Pack the qualified release artifact
         id: pack
@@ -224,6 +194,7 @@ jobs:
           tar -xzf "$TARBALL" -C "$AUDIT_ROOT"
           node --input-type=module <<'NODE'
           import { readFileSync, statSync } from "node:fs";
+          import { readMetadata, validateMetadata, assertPublishingIdentity } from "./scripts/validate-metadata.mjs";
           import path from "node:path";
 
           const files = new Set(
@@ -253,11 +224,11 @@ jobs:
           }
           const packageRoot = path.join(process.env.AUDIT_ROOT, "package");
           const packageJson = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-          const repositoryUrl = typeof packageJson.repository === "object" && packageJson.repository !== null
-            ? packageJson.repository.url
-            : undefined;
-          if (packageJson.name !== "urma-mcp" || packageJson.version !== process.env.EXPECTED_VERSION || repositoryUrl !== "https://github.com/sajidurdev/urma.git") {
-            throw new Error("Packed package metadata does not match the release request");
+          const { pkg: sourcePackage, server } = readMetadata();
+          assertPublishingIdentity(packageJson);
+          validateMetadata(packageJson, server);
+          if (packageJson.name !== sourcePackage.name || packageJson.version !== process.env.EXPECTED_VERSION) {
+            throw new Error("Packed package metadata does not match the validated release request");
           }
           statSync(path.join(packageRoot, "dist", "src", "cli", "main.js"));
           statSync(path.join(packageRoot, "launcher-v1.mjs"));
@@ -285,7 +256,8 @@ jobs:
             ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", prefix, process.env.TARBALL],
             { stdio: "inherit" },
           );
-          const packageRoot = path.join(prefix, "node_modules", "urma-mcp");
+          const packageName = JSON.parse(readFileSync("package.json", "utf8")).name;
+          const packageRoot = path.join(prefix, "node_modules", packageName);
           const cli = path.join(packageRoot, "dist", "src", "cli", "main.js");
           const environment = { ...process.env };
           for (const key of Object.keys(environment)) {
@@ -386,7 +358,7 @@ jobs:
       - name: Set up Node 24
         uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
           package-manager-cache: false
 
       - name: Download compatibility evidence
@@ -447,7 +419,7 @@ jobs:
       - name: Set up native Node 24
         uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
           package-manager-cache: false
 
       - name: Verify the exact tarball and prepare target paths
@@ -490,7 +462,7 @@ jobs:
         run: |
           set -euo pipefail
           export URMA_EXPECTED_TARGET='${{ matrix.target }}'
-          export URMA_QUALIFY_NODE_VERSION="$NODE_VERSION"
+          export URMA_QUALIFY_NODE_VERSION="$(cat .node-version)"
           export URMA_PACKAGE_TARBALL="$TARBALL"
           export URMA_RESULT_DIR="$EVIDENCE_DIR"
           export URMA_RUNNER_LABEL='${{ matrix.runner }}'
@@ -530,7 +502,7 @@ jobs:
       - name: Set up Node 24 for npm Trusted Publishing
         uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
@@ -549,6 +521,7 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { appendFileSync, readFileSync, readdirSync } from "node:fs";
+          import { readMetadata, validateMetadata, assertPublishingIdentity } from "./scripts/validate-metadata.mjs";
           import { execFileSync } from "node:child_process";
           import { createHash } from "node:crypto";
           import path from "node:path";
@@ -564,11 +537,11 @@ jobs:
           if (!tarballs[0].includes(process.env.EXPECTED_VERSION)) throw new Error("Publication tarball filename does not contain the package.json version");
           const packageJsonText = execFileSync("tar", ["-xOf", tarball, "package/package.json"], { encoding: "utf8" });
           const packageJson = JSON.parse(packageJsonText);
-          const repositoryUrl = typeof packageJson.repository === "object" && packageJson.repository !== null
-            ? packageJson.repository.url
-            : undefined;
-          if (packageJson.name !== "urma-mcp" || packageJson.version !== process.env.EXPECTED_VERSION || repositoryUrl !== "https://github.com/sajidurdev/urma.git") {
-            throw new Error("Publication tarball metadata does not match urma-mcp Trusted Publishing configuration");
+          const { pkg: sourcePackage, server } = readMetadata();
+          assertPublishingIdentity(packageJson);
+          validateMetadata(packageJson, server);
+          if (packageJson.name !== sourcePackage.name || packageJson.version !== process.env.EXPECTED_VERSION) {
+            throw new Error("Packed package metadata does not match the validated release request");
           }
           for (const [key, value] of Object.entries({ TARBALL: tarball, DIGEST_FILE: digestFile })) {
             appendFileSync(process.env.GITHUB_ENV, `${key}=${value}\n`);
@@ -593,7 +566,7 @@ jobs:
       - name: Publish the exact qualified tarball
         shell: bash
         env:
-          PACKAGE_NAME: urma-mcp
+          PACKAGE_NAME: ${{ needs.validate.outputs.package_name }}
           VERSION: ${{ needs.checks_and_pack.outputs.version }}
           DIST_TAG: ${{ needs.checks_and_pack.outputs.dist_tag }}
         run: |
@@ -675,6 +648,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ needs.validate.outputs.package_name }}
           RELEASE_TYPE: ${{ needs.checks_and_pack.outputs.release_type }}
           VERSION: ${{ needs.checks_and_pack.outputs.version }}
           DIST_TAG: ${{ needs.checks_and_pack.outputs.dist_tag }}
@@ -684,7 +658,7 @@ jobs:
           RELEASE_ARGS=(
             --verify-tag "$TAG"
             --title "Urma ${VERSION}"
-            --notes "Published urma-mcp@${VERSION} with npm dist-tag ${DIST_TAG}."
+            --notes "Published ${PACKAGE_NAME}@${VERSION} with npm dist-tag ${DIST_TAG}."
           )
           if [ "$RELEASE_TYPE" = "rc" ]; then
             RELEASE_ARGS+=(--prerelease)
