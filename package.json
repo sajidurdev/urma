@@ -4,7 +4,8 @@
     "type": "git",
     "url": "https://github.com/sajidurdev/urma.git"
   },
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
+  "mcpName": "io.github.sajidurdev/urma",
   "description": "Retrieve video captions and frames through a local MCP server.",
   "license": "Apache-2.0",
   "type": "module",

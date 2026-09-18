@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    # Ruleset 23609472 references this exact check name. Keep it stable.
+    name: CI / validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Install media test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg unzip
+          node scripts/prepare-ci-tools.mjs
+      - name: Install locked dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm build
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Unit tests
+        run: pnpm exec node --test dist/tests/unit/*.test.js
+      - name: Integration tests
+        run: pnpm exec node --test dist/tests/integration/*.test.js
+      - name: Package and MCP metadata
+        run: node scripts/validate-metadata.mjs
+      - name: CI and release validation tests
+        run: node --test scripts/tests/*.test.mjs
