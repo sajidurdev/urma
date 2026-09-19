@@ -13,6 +13,7 @@ import { loadConfig } from "../../src/config.js";
 import { parseInvestigationRef } from "../../src/core/ids.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
 import { runChecked } from "../../src/subprocess/runner.js";
+import { cadenceAssertionFailures } from "../../compat/cadence.js";
 
 type IndividualOutput = Readonly<{
   kind: "exact_points";
@@ -226,6 +227,18 @@ test("fixed cadence preserves canonical exact frames, panel mapping, and honest 
   assert.deepEqual(
     nearEndScheduled.slots.map((slot) => slot.requestedAtMs),
     [nearEnd],
+  );
+  assert.deepEqual(
+    cadenceAssertionFailures(nearEndScheduled, {
+      startMs: nearEnd,
+      endMs: durationMs,
+      cadenceMs: 1_000,
+      totalTargets: 1,
+      index: 0,
+      requestedAtMs: nearEnd,
+    }),
+    [],
+    "the compatibility harness must accept the public MCP cadence shape",
   );
   assert.equal(
     nearEndScheduled.slots[0]?.artifactId,

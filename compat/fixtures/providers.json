@@ -44,7 +44,7 @@
     "url": "https://www.twitch.tv/videos/337694295",
     "fixtureId": "337694295",
     "fixtureTitle": "GDQ Hotfix presents: SpeedRunsLive Mystery Game Tournament 13 Top 8 Finals Day 2!",
-    "expectedExtractor": "twitch",
+    "expectedExtractor": "twitch:vod",
     "restart": true,
     "refresh": true,
     "alternates": [
@@ -58,7 +58,7 @@
     "url": "https://www.twitch.tv/gamesdonequick/clip/RefinedCrunchyBulgogiBatChest",
     "fixtureId": "RefinedCrunchyBulgogiBatChest",
     "fixtureTitle": "AGDQ 2016 Super Monkey Ball Blitz",
-    "expectedExtractor": "twitch",
+    "expectedExtractor": "twitch:clips",
     "restart": true,
     "refresh": true,
     "notes": "Individual public GamesDoneQuick clip."
