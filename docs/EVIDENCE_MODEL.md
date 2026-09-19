@@ -1,7 +1,7 @@
 # Evidence model
 
 <p align="center">
-  <img src="assets/evidence-model.png" alt="Urma evidence model" width="100%" />
+  <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/docs/assets/evidence-model.png" alt="Urma evidence model" width="100%" />
 </p>
 
 Urma reports what it acquired and presented for one investigation. The
@@ -199,8 +199,9 @@ repair automatic captions, or infer speech that the source did not provide.
 ### Search
 
 `search_transcript` scans up to 10,000 segments of the selected track for a
-literal phrase or literal terms. The text and query are NFKC-normalized, lowercased, and cleaned
-so separators become spaces. Phrase mode checks for a normalized substring.
+literal phrase or literal terms. The text and query are NFKC-normalized,
+lowercased, and cleaned so separators become spaces. Phrase mode checks for a
+normalized substring.
 Terms mode requires every normalized term to occur as a substring.
 
 A single-query hit contains the matching cue and up to one preceding and one
