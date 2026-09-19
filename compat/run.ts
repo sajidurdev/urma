@@ -17,6 +17,7 @@ import {
 import { parseInvestigationRef, parseSourceRef } from "../src/core/ids.js";
 import { inspectMcpOutput, overviewMcpOutput } from "../src/mcp/schemas.js";
 import { SqliteStore } from "../src/store/sqlite-store.js";
+import { cadenceAssertionFailures } from "./cadence.js";
 
 /** Run compatibility checks through the public MCP contract */
 
@@ -1240,19 +1241,15 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
         const expectedAtMs = expectedIndex * cadenceMs;
         const slot = slots[0];
         const expectedTotalTargets = Math.ceil(durationMs / cadenceMs);
-        const validSchedule = schedule.kind === "fixed-cadence" &&
-          schedule.startMs === 0 &&
-          schedule.endMs === durationMs &&
-          schedule.cadenceMs === cadenceMs &&
-          schedule.totalTargets === expectedTotalTargets &&
-          schedule.policyVersion === "fixed-cadence-v1";
-        const validPage = pageInfo.startIndex === expectedIndex &&
-          pageInfo.endIndexExclusive === expectedIndex + 1 &&
-          validSchedule &&
-          slots.length === 1 &&
-          slot?.index === expectedIndex &&
-          slot.requestedAtMs === expectedAtMs &&
-          slot.status === "success";
+        const assertionFailures = cadenceAssertionFailures(pageOutput, {
+          startMs: 0,
+          endMs: durationMs,
+          cadenceMs,
+          totalTargets: expectedTotalTargets,
+          index: expectedIndex,
+          requestedAtMs: expectedAtMs,
+        });
+        const validPage = assertionFailures.length === 0;
         let jpeg: ResourceEvidence | null = null;
         if (validPage && slot) {
           const resource = stringValue(slot.resource);
@@ -1272,7 +1269,12 @@ async function runFixture(fixture: Fixture): Promise<AnyRecord> {
               slotErrorValue.retryable === true,
             )
             : null;
-          cadenceFailure = jpeg?.error ?? slotError ?? errorInfo("FRAME_FAILED", "Cadence page was not ordered JPEG evidence");
+          cadenceFailure = jpeg?.error ?? slotError ?? errorInfo(
+            "FRAME_FAILED",
+            assertionFailures.length > 0
+              ? `Cadence page failed assertions: ${assertionFailures.join("; ")}`
+              : "Cadence page was not ordered JPEG evidence",
+          );
         }
         schedulePages.push({
           page: page + 1,
