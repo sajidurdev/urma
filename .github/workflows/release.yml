@@ -208,7 +208,6 @@ jobs:
             "package/README.md",
             "package/launcher-v1.mjs",
             "package/dist/src/cli/main.js",
-            "package/assets/urma-banner.png",
             "package/assets/urma-logo.png",
           ];
           for (const file of required) {
@@ -217,7 +216,10 @@ jobs:
           if (![...files].some((file) => file.startsWith("package/docs/"))) {
             throw new Error("Packed artifact is missing docs/");
           }
-          for (const prefix of ["package/src/", "package/tests/", "package/compat/", "package/scripts/"]) {
+          if (files.has("package/assets/urma-banner.png")) {
+            throw new Error("Packed artifact contains the documentation banner");
+          }
+          for (const prefix of ["package/src/", "package/tests/", "package/compat/", "package/scripts/", "package/docs/assets/"]) {
             if ([...files].some((file) => file.startsWith(prefix))) {
               throw new Error(`Packed artifact contains excluded path ${prefix}`);
             }

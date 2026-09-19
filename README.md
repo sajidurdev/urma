@@ -1,12 +1,14 @@
 # Urma
 
 <div align="center">
-  <img src="assets/urma-banner.png" alt="Urma" width="100%" />
+  <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/assets/urma-banner.png" alt="Urma" width="100%" />
   <br /><br />
   <strong>Retrieve video captions and frames through MCP.</strong>
   <br />
   A stdio MCP server for bounded caption and visual evidence.
   <br /><br />
+  <a href="#try-urma">Try Urma</a>
+  ·
   <a href="#install-and-connect-a-host">Install</a>
   ·
   <a href="#tools">Tools</a>
@@ -20,6 +22,8 @@
 
 <br />
 
+> **Release candidate:** Use the `rc` npm tag for RC testing.
+
 Urma retrieves captions and sampled frames from videos with a known end time.
 Each result identifies its source snapshot and requested timestamps or range.
 The MCP host chooses what to retrieve and interprets the results.
@@ -28,18 +32,35 @@ Urma runs locally and stores its cache on your filesystem. Remote videos still
 require network access. The host receives the requested evidence and controls
 how it is processed or sent to a model.
 
-Urma exposes five tools:
-
-| Tool | Returns |
-| --- | --- |
-| `inspect_video` | A source snapshot and a new investigation reference. |
-| `search_transcript` | Literal matches in one selected caption track. |
-| `read_transcript` | Timestamped caption segments in a bounded interval. |
-| `get_overview` | A visual overview with up to 12 sampled cells. |
-| `get_frames` | Exact JPEG points, ordered sparse points, or a fixed-cadence schedule. |
-
 The server uses MCP stdio. A host starts one Urma process for a session and
 owns its lifecycle. Urma does not run a daemon or expose an HTTP API.
+
+## Try Urma
+
+1. Install the current RC with `npx -y urma-mcp@rc setup`.
+2. [Register your MCP host](#register-a-generic-json-host), then restart it.
+3. Give the host a video URL or allowed local path and ask it to locate a moment
+   using captions or an overview.
+4. Request exact frames around that moment to verify the visual claim.
+
+Example prompt (replace `<video URL>` with your source):
+
+> Inspect this product-demo video: `<video URL>`. Use captions to find where the presenter
+> mentions dark mode, use the overview to locate the settings screen, then
+> request exact frames around that timestamp to verify whether the dark-mode
+> toggle is enabled. If the returned frames do not show the toggle clearly,
+> say that the evidence is insufficient.
+
+## RC testing
+
+External testers can report installation, MCP-host, or source/provider problems
+through the [RC bug-report template](https://github.com/sajidurdev/urma/issues/new?template=bug-report.md).
+Include reproduction steps, your OS/architecture, Node.js and host versions,
+the installed Urma version, and expected versus actual behavior. For a
+source-specific issue, include a public URL or a description of a reproducible
+local video. Add relevant [doctor output](#cli-and-maintenance) if setup
+completed; otherwise include the setup error. Remove credentials, private
+URLs, and personal paths before posting logs.
 
 ## Install and connect a host
 
@@ -59,8 +80,18 @@ install or manage Node.js.
 Run the npm bootstrap with Node.js 24:
 
 ```sh
-npx -y urma-mcp@latest setup
+npx -y urma-mcp@rc setup
 ```
+
+The `rc` tag can move between candidates. To find its exact version without
+installing it:
+
+```sh
+npm view urma-mcp dist-tags.rc
+```
+
+For a repeatable install, replace `rc` in the setup command with the exact
+version returned above.
 
 Setup downloads and verifies the pinned native tools, checks that the installed
 runtime can serve MCP requests, and selects the new installation for future
@@ -86,7 +117,7 @@ If the host uses the usual `mcpServers` JSON shape, setup can add the `urma`
 entry and preserve the other entries in the file:
 
 ```sh
-npx -y urma-mcp@latest setup --client generic --config "/absolute/path/to/mcp.json"
+npx -y urma-mcp@rc setup --client generic --config "/absolute/path/to/mcp.json"
 ```
 
 The configuration file path must be absolute. The resulting entry has this
@@ -113,14 +144,21 @@ version checks.
 
 Host registration and runtime installation are reported separately. A healthy
 runtime can be left installed when the configuration file cannot be written.
-After registration, restart the host and check that it lists the five tools
-above.
+After registration, restart the host and check that it lists the [five tools](#tools).
 
 For a host with a different configuration format, create the equivalent
 stdio entry with the same absolute Node executable, launcher path, and
 `URMA_DATA_DIR` value.
 
 ## Tools
+
+| Tool | Returns |
+| --- | --- |
+| `inspect_video` | A source snapshot and a new investigation reference. |
+| `search_transcript` | Literal matches in one selected caption track. |
+| `read_transcript` | Timestamped caption segments in a bounded interval. |
+| `get_overview` | A visual overview with up to 12 sampled cells. |
+| `get_frames` | Exact JPEG points, ordered sparse points, or a fixed-cadence schedule. |
 
 Call `inspect_video` first for a new source. It accepts an HTTP(S) URL, an
 allowed local path, or a previously returned `sourceRef`. It rejects sources
@@ -300,8 +338,15 @@ paths. It does not look up FFmpeg, ffprobe, or yt-dlp through `PATH`.
 The npm entry point exposes setup and version checks:
 
 ```sh
-npx -y urma-mcp@latest --version
-npx -y urma-mcp@latest setup
+npx -y urma-mcp@rc --version
+npx -y urma-mcp@rc setup
+```
+
+The `npx` version command reports the npm candidate's version. To check the
+installed generation, use the Node and launcher paths printed by setup:
+
+```sh
+"/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" --version
 ```
 
 After setup, run the read-only doctor through the persistent launcher:
@@ -320,6 +365,10 @@ Doctor checks the selected runtime, Node version, SQLite/FTS5, native-tool
 versions, storage, blob access, local roots, and frame-schedule limits. It
 prints its report to stderr and exits with status 0 when no check fails
 (warnings are allowed), or 1 when a check fails.
+
+For both version checks and doctor, set `URMA_DATA_DIR` if setup used a custom
+data root. To diagnose host behavior, also use the host's `URMA_LOCAL_ROOTS`
+and other Urma settings. If setup did not complete, report its error instead.
 
 The launcher also provides local generation recovery:
 

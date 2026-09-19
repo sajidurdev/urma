@@ -1,7 +1,7 @@
 # Architecture
 
 <p align="center">
-  <img src="assets/architecture.png" alt="Urma architecture" width="100%" />
+  <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/docs/assets/architecture.png" alt="Urma architecture" width="100%" />
 </p>
 
 The MCP server routes requests to `EvidenceService`, which resolves sources,
@@ -42,7 +42,7 @@ Node.js 24 LTS installation, `urma setup`:
 
 1. Detects the supported platform target and validates the user-owned local
    data root.
-2. Copies the packaged Urma runtime and materializes the exact native artifacts
+2. Copies the packaged Urma runtime and installs the exact native artifacts
    named by the release manifest.
 3. Verifies archive contents, executable identities, and hashes.
 4. Runs native qualification and a persisted-runtime MCP smoke test.
@@ -133,9 +133,9 @@ absence. File statistics alone do not define the revision.
 ```
 
 Source-level cache and in-flight work for equivalent requests can be reused.
-Presentations are recorded separately for each investigation. A new investigation starts with
-zero presented evidence even when the required bytes already exist in the
-cache.
+Presentations are recorded separately for each investigation. A new
+investigation starts with zero presented evidence even when the required bytes
+already exist in the cache.
 
 After inspection, each tool independently acquires the requested caption track,
 overview, or frames and records the evidence presented to the investigation.

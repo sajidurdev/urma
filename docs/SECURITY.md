@@ -1,7 +1,7 @@
 # Security
 
 <p align="center">
-  <img src="assets/security.png" alt="Urma security" width="100%" />
+  <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/docs/assets/security.png" alt="Urma security" width="100%" />
 </p>
 
 Urma's controls assume one user, local Node.js, generation-local native
@@ -70,9 +70,6 @@ The runtime does not discover FFmpeg, ffprobe, or yt-dlp through `PATH`. Before
 each native tool is first used in a process, Urma verifies its installed file
 against the receipt hash. The result is cached for that process. A missing or
 modified executable fails the operation; there is no system-binary fallback.
-
-The receipt records installation provenance; native-tool hash verification
-happens on first use in each process.
 
 ## Remote URL and network boundary
 

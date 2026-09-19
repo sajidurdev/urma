@@ -1,7 +1,7 @@
 # Contributing
 
 <p align="center">
-  <img src="assets/contribution.png" alt="Contributing to Urma" width="100%" />
+  <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/docs/assets/contribution.png" alt="Contributing to Urma" width="100%" />
 </p>
 
 Contributions are welcome, including bug fixes, documentation corrections,
@@ -13,10 +13,11 @@ boundaries.
 
 ## Development setup
 
-Use Node.js 24 (`>=24 <25`) and the pnpm version declared in `package.json`.
+Use the Node.js 24 version in [`.node-version`](../.node-version) and the pnpm
+version declared in `package.json`.
 The test suites also use `ffmpeg`, `ffprobe`, and `yt-dlp` from `PATH`. Media
 fixtures require an FFmpeg build with `libx264`. See
-[`release.yml`](../.github/workflows/release.yml) for the CI tool setup and
+[`ci.yml`](../.github/workflows/ci.yml) for the CI tool setup and
 [`manifest.ts`](../src/distribution/manifest.ts) for pinned native versions.
 Packaged installations use their own managed tools; setup does not add them
 to your development shell's `PATH`.
@@ -42,6 +43,12 @@ pnpm test:integration
 ```
 
 Each test script builds first. `pnpm check` runs the type-check and both suites.
+For package metadata or CI/release changes, also run:
+
+```sh
+node scripts/validate-metadata.mjs
+node --test scripts/tests/*.test.mjs
+```
 
 ## Change expectations
 

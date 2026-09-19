@@ -1,10 +1,10 @@
 # Product scope
 
 <p align="center">
-  <img src="assets/product-scope.png" alt="Urma product scope" width="100%" />
+  <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/docs/assets/product-scope.png" alt="Urma product scope" width="100%" />
 </p>
 
-Urma is a local-first MCP server for acquiring bounded video evidence. It
+Urma is a local MCP server for retrieving captions and frames from videos. It
 resolves a source, pins a finite timeline, acquires source-provided captions or
 video, validates the result, and records provenance for each investigation.
 
