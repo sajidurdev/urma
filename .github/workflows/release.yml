@@ -72,21 +72,13 @@ jobs:
             }
             const tagCheck = spawnSync(
               "git",
-              ["ls-remote", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`],
+              ["rev-parse", "--verify", `refs/tags/${tag}^{commit}`],
               { encoding: "utf8" },
             );
-            if (tagCheck.status !== 0) {
-              fail(`Could not verify Git tag ${tag}${tagCheck.stderr ? `: ${tagCheck.stderr.trim()}` : ""}`);
+            if (tagCheck.error) {
+              fail(`Could not verify Git tag ${tag}: ${tagCheck.error.message}`);
             }
-            const refs = new Map(
-              tagCheck.stdout
-                .trim()
-                .split(/\r?\n/u)
-                .filter(Boolean)
-                .map((line) => line.split(/\s+/u, 2))
-                .filter((parts) => parts.length === 2),
-            );
-            const target = refs.get(`refs/tags/${tag}^{}`) ?? refs.get(`refs/tags/${tag}`);
+            const target = tagCheck.status === 0 ? tagCheck.stdout.trim() : undefined;
             if (target !== undefined && target !== currentSha) {
               const ancestor = spawnSync("git", ["merge-base", "--is-ancestor", target, currentSha], { encoding: "utf8" });
               if (ancestor.status !== 0) {
@@ -629,10 +621,9 @@ jobs:
           const currentSha = process.env.GITHUB_SHA;
           if (!/^[0-9a-f]{40}$/iu.test(currentSha ?? "")) throw new Error("GITHUB_SHA is unavailable or is not a full commit SHA");
           const targetForTag = () => {
-            const result = spawnSync("git", ["ls-remote", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`], { encoding: "utf8" });
-            if (result.status !== 0) throw new Error(`Could not verify Git tag ${tag}${result.stderr ? `: ${result.stderr.trim()}` : ""}`);
-            const refs = new Map(result.stdout.trim().split(/\r?\n/u).filter(Boolean).map((line) => line.split(/\s+/u, 2)).filter((parts) => parts.length === 2));
-            return refs.get(`refs/tags/${tag}^{}`) ?? refs.get(`refs/tags/${tag}`);
+            const result = spawnSync("git", ["rev-parse", "--verify", `refs/tags/${tag}^{commit}`], { encoding: "utf8" });
+            if (result.error) throw new Error(`Could not verify Git tag ${tag}: ${result.error.message}`);
+            return result.status === 0 ? result.stdout.trim() : undefined;
           };
           const existing = targetForTag();
           if (existing !== undefined) {
