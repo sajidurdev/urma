@@ -1,7 +1,7 @@
 [
   {
     "provider": "YouTube",
-    "tier": "A",
+    "tier": "B",
     "url": "https://www.youtube.com/watch?v=yP0axVHdP-U",
     "fixtureId": "yP0axVHdP-U",
     "expectedExtractor": "youtube",
@@ -25,7 +25,7 @@
   },
   {
     "provider": "Reddit",
-    "tier": "A",
+    "tier": "B",
     "url": "https://www.reddit.com/r/interestingasfuck/comments/1q0jm8w/space_pig/",
     "fixtureId": "1q0jm8w",
     "fixtureTitle": "Space pig !!",
@@ -40,7 +40,7 @@
   },
   {
     "provider": "Twitch VOD",
-    "tier": "A",
+    "tier": "B",
     "url": "https://www.twitch.tv/videos/337694295",
     "fixtureId": "337694295",
     "fixtureTitle": "GDQ Hotfix presents: SpeedRunsLive Mystery Game Tournament 13 Top 8 Finals Day 2!",
@@ -54,7 +54,7 @@
   },
   {
     "provider": "Twitch Clip",
-    "tier": "A",
+    "tier": "B",
     "url": "https://www.twitch.tv/gamesdonequick/clip/RefinedCrunchyBulgogiBatChest",
     "fixtureId": "RefinedCrunchyBulgogiBatChest",
     "fixtureTitle": "AGDQ 2016 Super Monkey Ball Blitz",
@@ -65,7 +65,7 @@
   },
   {
     "provider": "Facebook Video",
-    "tier": "A",
+    "tier": "B",
     "url": "https://www.facebook.com/facebook/videos/prime-time-hack-the-birth-of-facebook-video/238358730483/",
     "fixtureId": "238358730483",
     "fixtureTitle": "The birth of Facebook Video",
@@ -104,7 +104,7 @@
   },
   {
     "provider": "TikTok",
-    "tier": "A",
+    "tier": "B",
     "url": "https://www.tiktok.com/@scout2015/video/6718335390845095173",
     "fixtureId": "6718335390845095173",
     "fixtureTitle": "Scramble up ur name & I'll try to guess it",
@@ -118,7 +118,7 @@
   },
   {
     "provider": "Vimeo",
-    "tier": "A",
+    "tier": "B",
     "url": "https://vimeo.com/76979871",
     "fixtureId": "76979871",
     "fixtureTitle": "The New Vimeo Player (You Know, For Videos)",
@@ -156,7 +156,7 @@
   },
   {
     "provider": "Dailymotion",
-    "tier": "A",
+    "tier": "B",
     "url": "https://www.dailymotion.com/video/x84sh87",
     "fixtureTitle": "Dailymotion demo video",
     "fixtureId": "x84sh87",
@@ -170,7 +170,7 @@
   },
   {
     "provider": "Bilibili",
-    "tier": "A",
+    "tier": "B",
     "url": "https://www.bilibili.com/video/BV1zv411H72G",
     "fixtureId": "BV1zv411H72G",
     "alternates": [
