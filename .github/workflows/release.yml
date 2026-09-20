@@ -88,7 +88,10 @@ jobs:
             );
             const target = refs.get(`refs/tags/${tag}^{}`) ?? refs.get(`refs/tags/${tag}`);
             if (target !== undefined && target !== currentSha) {
-              fail(`Git tag ${tag} already exists at ${target}, not current GITHUB_SHA ${currentSha}`);
+              const ancestor = spawnSync("git", ["merge-base", "--is-ancestor", target, currentSha], { encoding: "utf8" });
+              if (ancestor.status !== 0) {
+                fail(`Git tag ${tag} already exists at ${target}, not an ancestor of current GITHUB_SHA ${currentSha}`);
+              }
             }
           }
 
@@ -633,8 +636,15 @@ jobs:
           };
           const existing = targetForTag();
           if (existing !== undefined) {
-            if (existing !== currentSha) throw new Error(`Git tag ${tag} already exists at ${existing}, not current GITHUB_SHA ${currentSha}`);
-            process.stdout.write(`Git tag ${tag} already points to current GITHUB_SHA; reusing it\n`);
+            if (existing !== currentSha) {
+              const ancestor = spawnSync("git", ["merge-base", "--is-ancestor", existing, currentSha], { encoding: "utf8" });
+              if (ancestor.status !== 0) {
+                throw new Error(`Git tag ${tag} already exists at ${existing}, not an ancestor of current GITHUB_SHA ${currentSha}`);
+              }
+              process.stdout.write(`Git tag ${tag} already points to an ancestor of current GITHUB_SHA; reusing the immutable tag after exact artifact verification\n`);
+            } else {
+              process.stdout.write(`Git tag ${tag} already points to current GITHUB_SHA; reusing it\n`);
+            }
           } else {
             const created = spawnSync("git", ["tag", "--annotate", tag, "--message", `Urma ${process.env.VERSION}`, currentSha], { encoding: "utf8" });
             if (created.status !== 0) throw new Error(`Could not create Git tag ${tag}: ${created.stderr?.trim() ?? "unknown error"}`);
