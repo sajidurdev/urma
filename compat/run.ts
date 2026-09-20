@@ -364,7 +364,15 @@ function classifyFailure(stage: string, error: ErrorInfo): FailureClass {
   return "INTERNAL_BUG";
 }
 
-function responsibility(failure: FailureClass): "Urma" | "upstream" | "fixture" {
+type FailureResponsibility = "Urma" | "upstream" | "fixture" | "transport";
+
+function isKnownTransportLimitation(failure: FailureClass, error: ErrorInfo): boolean {
+  if (failure !== "ACQUISITION_FAILED" || error.code !== "TARGETED_MEDIA_UNAVAILABLE") return false;
+  return /bounded section \[[^\]]+\) does not cover target \d+ ms|reusable evidence media does not provide validated timing coverage for target \d+ ms/iu.test(error.detail);
+}
+
+function responsibility(failure: FailureClass, error: ErrorInfo): FailureResponsibility {
+  if (isKnownTransportLimitation(failure, error)) return "transport";
   if ([
     "FIXTURE_GONE",
     "FIXTURE_NOT_SINGLE_VIDEO",
@@ -636,7 +644,7 @@ function addFailure(
     observedError: error.detail,
     code: error.code,
     retryable: error.retryable,
-    responsibility: responsibility(failure),
+    responsibility: responsibility(failure, error),
     blocking,
   };
   failures.push(item);
@@ -1839,7 +1847,7 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
     lines.push(`  - failure code: ${String(failure?.class ?? "INTERNAL_BUG")}`);
     lines.push(`  - actual observed failure: ${String(failure?.observedError ?? "not recorded")}`);
     lines.push(`  - stage: ${String(failure?.stage ?? "unknown")}`);
-    lines.push(`  - Urma vs upstream: ${String(failure?.responsibility ?? "Urma")}`);
+    lines.push(`  - failure responsibility: ${String(failure?.responsibility ?? "Urma")}`);
     lines.push(`  - alternate fixtures attempted: ${Math.max(0, attempts - 1)}`);
   }
 
@@ -1925,7 +1933,6 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
     Vimeo: ["Vimeo"],
   };
   const recommendationFor = (name: string): string => {
-    if (name === "YouTube") return "FIRST_CLASS_CANDIDATE";
     const selected = results.filter((result) => (aliases[name] ?? []).includes(String(result.provider)));
     if (selected.length === 0) return "UNTESTED";
     const values = selected.map((result) => String(result.classification));
@@ -1946,7 +1953,10 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
       }).join("; ") || "No exercised fixture.";
     lines.push(`| ${name} | ${recommendation} | ${markdownCell(basis)} |`);
   }
-  lines.push("", "Product wording: Urma supports public finite non-DRM video URLs through a secured generic best-effort path. YouTube is the established continuously tested first-class control; X / Twitter, Facebook Video, Instagram Reel, and Loom are first-class candidates from this pass pending continuous-run history. Provider, fixture, regional access, caption, and overview availability can vary; login, cookies, DRM, live streams, and signed delivery URLs are outside this claim.");
+  const currentTierA = results
+    .filter((result) => result.tier === "A" && result.classification === "FIRST_CLASS_CANDIDATE")
+    .map((result) => String(result.provider));
+  lines.push("", `Product wording: Urma supports public finite non-DRM video URLs through a secured generic best-effort path. Current Tier A first-class candidates observed in this run: ${currentTierA.length > 0 ? currentTierA.join(", ") : "none"}. Tier B providers remain non-first-class and are not compatibility claims. Provider, fixture, regional access, caption, and overview availability can vary; login, cookies, DRM, live streams, and signed delivery URLs are outside this claim.`);
 
   const overviewPartial = partial.some((result) => matrixStatus(result, "overview") !== "PASS");
   const boundedAcquisitionGap = results.some((result) => {

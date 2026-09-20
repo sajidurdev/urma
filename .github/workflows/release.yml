@@ -296,7 +296,8 @@ jobs:
         shell: bash
         env:
           URMA_RUN_COMPAT: "1"
-          URMA_COMPAT_TIER: A
+          URMA_COMPAT_TIER: ""
+          URMA_COMPAT_INCLUDE_UNTESTED: "1"
           URMA_COMPAT_REGRESSION_STATUS: "release artifact compatibility gauntlet"
         run: pnpm exec node dist/compat/run.js
 
@@ -342,7 +343,7 @@ jobs:
           retention-days: 14
 
   compatibility_gate:
-    name: Enforce Tier A compatibility
+    name: Evaluate release correctness and compatibility
     needs:
       - validate
       - checks_and_pack
@@ -369,7 +370,7 @@ jobs:
           name: urma-release-package-${{ github.run_id }}
           path: release-artifact
 
-      - name: Evaluate Tier A release gate
+      - name: Evaluate release correctness and compatibility gate
         shell: bash
         env:
           RELEASE_TYPE: ${{ needs.validate.outputs.release_type }}

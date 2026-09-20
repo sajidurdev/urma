@@ -43,22 +43,21 @@ function provider(value, label) {
   return value.provider;
 }
 
-function manifestTierA(manifest) {
+function manifestEntries(manifest) {
   if (!Array.isArray(manifest)) throw new Error("compatibility fixture manifest must be an array");
-  const names = [];
+  const entries = [];
   const seen = new Set();
   manifest.forEach((item, index) => {
     if (!record(item)) throw new Error(`compatibility fixture manifest row ${index + 1} must be an object`);
     if (item.tier !== "A" && item.tier !== "B") {
       throw new Error(`compatibility fixture manifest row ${index + 1} has invalid tier ${JSON.stringify(item.tier)}`);
     }
-    if (item.tier !== "A") return;
     const name = provider(item, `compatibility fixture manifest row ${index + 1}`);
-    if (seen.has(name)) throw new Error(`compatibility fixture manifest has duplicate Tier A provider ${JSON.stringify(name)}`);
+    if (seen.has(name)) throw new Error(`compatibility fixture manifest has duplicate provider ${JSON.stringify(name)}`);
     seen.add(name);
-    names.push(name);
+    entries.push({ name, tier: item.tier });
   });
-  return names;
+  return entries;
 }
 
 function resultFailures(result) {
@@ -83,6 +82,10 @@ function primaryReason(result) {
     ? ` ${text(primary.error.code) ?? "error"}: ${text(primary.error.detail) ?? "no detail"}`
     : "";
   return `primary=${text(primary.status) ?? "MISSING"}${error}`;
+}
+
+function isBlocking(failure) {
+  return failure.blocking !== false;
 }
 
 function fullPass(result) {
@@ -119,17 +122,49 @@ function resultReason(result) {
       return `${kind}[${cause}]`;
     });
   if (causes.length > 0) reasons.push(`failures=${[...new Set(causes)].join(",")}`);
-  return reasons.length > 0 ? reasons.join("; ") : "not a full Tier A pass";
+  return reasons.length > 0 ? reasons.join("; ") : "not a full compatibility pass";
 }
 
 function regressionEvidence(results) {
   return results.flatMap((result) => resultFailures(result)
-    .filter((failure) => failure.responsibility === "Urma")
+    .filter((failure) => failure.responsibility === "Urma" && isBlocking(failure))
     .map((failure) => `${provider(result, "compatibility result")}: ${text(failure.class) ?? "failure"} — ${text(failure.observedError) ?? "no detail"}`));
 }
 
+function liveProviderCoverage(entries, results) {
+  const byProvider = new Map();
+  for (const result of results) {
+    if (!record(result)) continue;
+    const name = provider(result, "compatibility result");
+    const matches = byProvider.get(name) ?? [];
+    matches.push(result);
+    byProvider.set(name, matches);
+  }
+  const issues = [];
+  for (const entry of entries.filter((item) => item.tier === "B")) {
+    const matches = byProvider.get(entry.name) ?? [];
+    if (matches.length === 0) {
+      issues.push(`${entry.name}: missing result`);
+      continue;
+    }
+    if (matches.length > 1) {
+      issues.push(`${entry.name}: duplicate result`);
+      continue;
+    }
+    const result = matches[0];
+    if (result.classification !== "BEST_EFFORT_PASS" && result.classification !== "FIRST_CLASS_CANDIDATE") {
+      issues.push(`${entry.name}: ${resultReason(result)}`);
+    }
+  }
+  return {
+    status: issues.length === 0 ? "COMPLETE" : "INCOMPLETE",
+    issues,
+  };
+}
+
 export function evaluateCompatibility(manifest, report) {
-  const expected = manifestTierA(manifest);
+  const entries = manifestEntries(manifest);
+  const expected = entries.filter((entry) => entry.tier === "A").map((entry) => entry.name);
   if (!record(report) || !Array.isArray(report.results) || report.results.length === 0) {
     throw new Error("compatibility report must contain a non-empty results array");
   }
@@ -149,46 +184,72 @@ export function evaluateCompatibility(manifest, report) {
   const incomplete = tierA
     .filter((result) => expected.includes(provider(result, "compatibility result")) && !fullPass(result))
     .map((result) => `${provider(result, "compatibility result")}: ${resultReason(result)}`);
-  const failures = [
+  const tierAFailures = [
     ...missing.map((name) => `${name}: missing result`),
     ...duplicate.map((name) => `${name}: duplicate result`),
     ...unexpected.map((name) => `${name}: unexpected Tier A result`),
     ...incomplete,
   ];
+  const regression = regressionEvidence(results);
+  const coverage = liveProviderCoverage(entries, results);
+  const releaseCorrectness = tierAFailures.length === 0 && regression.length === 0 ? "PASS" : "FAIL";
   return {
+    entries,
     tierA,
     expected,
-    failures,
-    regressionEvidence: regressionEvidence(tierA),
-    passed: failures.length === 0,
+    failures: tierAFailures,
+    tierAFailures,
+    regressionEvidence: regression,
+    tierAQualification: tierAFailures.length === 0 ? "PASS" : "INCOMPLETE",
+    externalCoverage: coverage.status,
+    externalCoverageIssues: coverage.issues,
+    releaseCorrectness,
+    passed: releaseCorrectness === "PASS",
   };
 }
 
 export function gateText(summary) {
   const lines = [
-    `Tier A compatibility qualification: ${summary.passed ? "PASS" : "INCOMPLETE"}`,
-    `Urma regression evidence: ${summary.regressionEvidence.length > 0 ? summary.regressionEvidence.join(" | ") : "none demonstrated"}`,
+    `Release correctness: ${summary.releaseCorrectness}`,
+    `Tier A first-class qualification: ${summary.tierAQualification}`,
+    `External live-provider coverage: ${summary.externalCoverage}`,
+    `Urma regression evidence: ${summary.regressionEvidence.length > 0 ? summary.regressionEvidence.join(" | ") : "none"}`,
   ];
-  if (summary.failures.length > 0) lines.push(`Tier A qualification failures: ${summary.failures.join(" | ")}`);
+  if (summary.tierAFailures.length > 0) lines.push(`Tier A qualification failures: ${summary.tierAFailures.join(" | ")}`);
+  if (summary.externalCoverageIssues.length > 0) lines.push(`Live-provider coverage details: ${summary.externalCoverageIssues.join(" | ")}`);
   return lines.join("\n");
 }
 
-async function main() {
-  const reportPath = path.resolve(process.argv[2] ?? "compat/results/latest.json");
-  const manifestPath = path.resolve(process.argv[3] ?? "compat/fixtures/providers.json");
-  const releaseType = process.env.RELEASE_TYPE ?? "rc";
+export async function runGate(options = {}) {
+  const reportPath = path.resolve(options.reportPath ?? "compat/results/latest.json");
+  const manifestPath = path.resolve(options.manifestPath ?? "compat/fixtures/providers.json");
+  const releaseType = options.releaseType ?? process.env.RELEASE_TYPE ?? "rc";
   if (!["test", "rc", "stable"].includes(releaseType)) {
     throw new Error(`compatibility gate received unsupported release type ${JSON.stringify(releaseType)}`);
   }
   const report = JSON.parse(await readFile(reportPath, "utf8"));
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   const summary = evaluateCompatibility(manifest, report);
-  process.stdout.write(`${gateText(summary)}\n`);
-  if (!summary.passed && releaseType !== "test") {
-    throw new Error(`Tier A compatibility qualification failed for release_type=${releaseType}; inspect ${reportPath}.`);
+  const lines = [gateText(summary)];
+  if (releaseType === "test") {
+    lines.push("release_type=test: diagnostic only; publication is disabled for test runs.");
   }
-  if (!summary.passed) {
-    process.stdout.write("release_type=test: continuing for investigation; publication is disabled for test runs.\n");
+  return {
+    summary,
+    output: `${lines.join("\n")}\n`,
+    shouldFail: summary.releaseCorrectness !== "PASS" && releaseType !== "test",
+    reportPath,
+  };
+}
+
+async function main() {
+  const result = await runGate({
+    reportPath: process.argv[2],
+    manifestPath: process.argv[3],
+  });
+  process.stdout.write(result.output);
+  if (result.shouldFail) {
+    throw new Error(`Release correctness compatibility gate failed for release_type=${process.env.RELEASE_TYPE ?? "rc"}; inspect ${result.reportPath}.`);
   }
 }
 
