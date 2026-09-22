@@ -10,6 +10,7 @@ import {
   getDefaultEnvironment,
   StdioClientTransport,
 } from "@modelcontextprotocol/client/stdio";
+import { URMA_SERVER_ICONS } from "../../src/mcp/logo.js";
 import { URMA_VERSION } from "../../src/version.js";
 import { runChecked } from "../../src/subprocess/runner.js";
 
@@ -63,12 +64,28 @@ test("stdio server keeps stdout protocol-clean", async (t) => {
   serverPid = transport.pid;
   assert.equal(typeof serverPid, "number");
   const serverVersion = client.getServerVersion();
-  assert.equal(serverVersion?.name, "urma");
-  assert.equal(serverVersion?.version, URMA_VERSION);
-  assert.equal(serverVersion?.icons?.length, 1);
-  assert.equal(serverVersion?.icons?.[0]?.mimeType, "image/png");
-  assert.deepEqual(serverVersion?.icons?.[0]?.sizes, ["256x256"]);
-  assert.match(serverVersion?.icons?.[0]?.src ?? "", /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/);
+  const logo = await readFile(path.resolve("assets/urma-logo.png"));
+  assert.deepEqual(
+    [...logo.subarray(0, 8)],
+    [137, 80, 78, 71, 13, 10, 26, 10],
+  );
+  assert.equal(logo.readUInt32BE(16), 256);
+  assert.equal(logo.readUInt32BE(20), 256);
+  assert.deepEqual(URMA_SERVER_ICONS, [
+    {
+      src: `data:image/png;base64,${logo.toString("base64")}`,
+      mimeType: "image/png",
+      sizes: ["256x256"],
+    },
+  ]);
+  assert.deepEqual(serverVersion, {
+    name: "urma",
+    title: "Urma",
+    version: URMA_VERSION,
+    description: "Retrieve video captions and frames through MCP.",
+    websiteUrl: "https://github.com/sajidurdev/urma",
+    icons: URMA_SERVER_ICONS,
+  });
   const listed = await client.listTools();
   assert.deepEqual(
     listed.tools.map((tool) => tool.name),

@@ -86,6 +86,21 @@ const CALLER_SECURITY_FLAGS = new Set([
   "--referer",
 ]);
 
+const GENERIC_CLOUDFLARE_CHALLENGE_SIGNATURES = [
+  /\[generic\]/u,
+  /\bHTTP Error 403\b/u,
+  /Cloudflare anti-bot challenge/u,
+  /try again with\s+--extractor-args\s+["']generic:impersonate["']/u,
+] as const;
+
+function isGenericCloudflareChallenge(error: unknown): boolean {
+  return error instanceof UrmaError &&
+    error.code === "SOURCE_UNAVAILABLE" &&
+    GENERIC_CLOUDFLARE_CHALLENGE_SIGNATURES.every((signature) =>
+      signature.test(error.message)
+    );
+}
+
 /** Flags verified against pinned yt-dlp 2026.08.19 */
 export function hermeticYtDlpArgs(
   args: readonly string[],
@@ -164,15 +179,31 @@ export class YtDlp {
     url: string,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
-    const result = await this.run(
-      [
-        "--dump-single-json",
-        "--skip-download",
-        "--no-warnings",
-        url,
-      ],
-      { signal, timeoutMs: this.config.limits.metadataTimeoutMs, remote: true },
+    const metadataArgs = [
+      "--dump-single-json",
+      "--skip-download",
+      "--no-warnings",
+      url,
+    ];
+    const runMetadata = (internalArgs: readonly string[] = []) => this.run(
+      metadataArgs,
+      {
+        signal,
+        timeoutMs: this.config.limits.metadataTimeoutMs,
+        remote: true,
+        internalArgs,
+      },
     );
+    let result: ProcessResult;
+    try {
+      result = await runMetadata();
+    } catch (error) {
+      if (!isGenericCloudflareChallenge(error)) throw error;
+      result = await runMetadata([
+        "--extractor-args",
+        "generic:impersonate",
+      ]);
+    }
     try {
       const parsed = JSON.parse(result.stdout.toString("utf8")) as unknown;
       if (

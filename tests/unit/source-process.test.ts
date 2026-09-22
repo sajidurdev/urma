@@ -15,6 +15,7 @@ import {
   type SourceRef,
 } from "../../src/core/ids.js";
 import { loadConfig } from "../../src/config.js";
+import { UrmaError } from "../../src/core/errors.js";
 import {
   resolveLocalBundle,
   resolveLocalPath,
@@ -520,6 +521,208 @@ test("yt-dlp metadata admission rejects multi-entry result classes explicitly", 
     ytdlp.metadata("https://example.test/collection"),
     /multi-entry|only one finite video/u,
   );
+});
+
+test("yt-dlp retries a generic Cloudflare challenge once with impersonation", async () => {
+  const calls: string[][] = [];
+  let attempt = 0;
+  const ytdlp = new YtDlp(
+    loadConfig({ URMA_YTDLP: "yt-dlp" }),
+    async (executable, args) => {
+      calls.push([...args]);
+      attempt += 1;
+      if (attempt === 1) {
+        throw new UrmaError(
+          "SOURCE_UNAVAILABLE",
+          'yt-dlp failed: ERROR: [generic] Got HTTP Error 403 caused by Cloudflare anti-bot challenge; try again with --extractor-args "generic:impersonate"',
+          { retryable: true },
+        );
+      }
+      return {
+        executable,
+        args,
+        code: 0,
+        stdout: Buffer.from(JSON.stringify({ _type: "video", id: "generic-video" })),
+        stderr: Buffer.alloc(0),
+        wallMs: 1,
+      };
+    },
+    testRemoteContext,
+  );
+
+  const info = await ytdlp.metadata("https://example.test/video");
+  assert.equal(info.id, "generic-video");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]?.includes("--extractor-args"), false);
+  const extractorArgsIndex = calls[1]?.indexOf("--extractor-args") ?? -1;
+  assert.equal(calls[1]?.[extractorArgsIndex + 1], "generic:impersonate");
+  for (const flag of [
+    "--ignore-config",
+    "--no-config-locations",
+    "--no-plugin-dirs",
+    "--no-cookies",
+    "--no-cookies-from-browser",
+    "--no-exec",
+    "--no-cache-dir",
+    "--no-remote-components",
+    "--no-js-runtimes",
+    "--proxy",
+  ]) {
+    assert.equal(calls[1]?.includes(flag), true, flag);
+  }
+  const proxyIndex = calls[1]?.indexOf("--proxy") ?? -1;
+  assert.equal(calls[1]?.[proxyIndex + 1], "http://127.0.0.1:41234");
+  for (const flag of [
+    "--cookies",
+    "--cookies-from-browser",
+    "--netrc",
+    "--netrc-location",
+    "--netrc-cmd",
+    "--plugin-dirs",
+    "--remote-components",
+    "--exec",
+    "--config-locations",
+  ]) {
+    assert.equal(calls[1]?.includes(flag), false, flag);
+  }
+  assert.equal(
+    (calls[1]?.filter((argument) => argument.includes("http://127.0.0.1:41234")).length ?? 0) >= 4,
+    true,
+  );
+});
+
+test("yt-dlp does not retry a Cloudflare-looking 403 without the impersonation hint", async () => {
+  let calls = 0;
+  const challengeWithoutHint =
+    "yt-dlp failed: ERROR: [generic] Got HTTP Error 403 caused by Cloudflare anti-bot challenge;";
+  const ytdlp = new YtDlp(
+    loadConfig({ URMA_YTDLP: "yt-dlp" }),
+    async () => {
+      calls += 1;
+      throw new UrmaError("SOURCE_UNAVAILABLE", challengeWithoutHint, {
+        retryable: true,
+      });
+    },
+    testRemoteContext,
+  );
+
+  await assert.rejects(
+    ytdlp.metadata("https://example.test/video"),
+    (error: unknown) =>
+      error instanceof UrmaError &&
+      error.code === "SOURCE_UNAVAILABLE" &&
+      error.message === challengeWithoutHint,
+  );
+
+  assert.equal(calls, 1);
+});
+
+test("yt-dlp does not retry unrelated generic 403 or login failures", async () => {
+  const failures = [
+    "yt-dlp failed: ERROR: [generic] Got HTTP Error 403: Forbidden",
+    "yt-dlp failed: ERROR: [generic] Sign in to confirm access to this video",
+  ];
+
+  for (const failure of failures) {
+    let calls = 0;
+    const ytdlp = new YtDlp(
+      loadConfig({ URMA_YTDLP: "yt-dlp" }),
+      async () => {
+        calls += 1;
+        throw new UrmaError("SOURCE_UNAVAILABLE", failure, {
+          retryable: true,
+        });
+      },
+      testRemoteContext,
+    );
+
+    await assert.rejects(
+      ytdlp.metadata("https://example.test/video"),
+      (error: unknown) =>
+        error instanceof UrmaError &&
+        error.code === "SOURCE_UNAVAILABLE" &&
+        error.message === failure,
+    );
+
+    assert.equal(calls, 1, failure);
+  }
+});
+
+test("yt-dlp does not impersonate normal generic requests or provider-specific failures", async () => {
+  const normalCalls: string[][] = [];
+  const normal = new YtDlp(
+    loadConfig({ URMA_YTDLP: "yt-dlp" }),
+    async (executable, args) => {
+      normalCalls.push([...args]);
+      return {
+        executable,
+        args,
+        code: 0,
+        stdout: Buffer.from(JSON.stringify({ _type: "video", id: "normal-video" })),
+        stderr: Buffer.alloc(0),
+        wallMs: 1,
+      };
+    },
+    testRemoteContext,
+  );
+  await normal.metadata("https://example.test/video");
+  assert.equal(normalCalls.length, 1);
+  assert.equal(normalCalls[0]?.includes("--extractor-args"), false);
+
+  const providerCalls: string[][] = [];
+  const provider = new YtDlp(
+    loadConfig({ URMA_YTDLP: "yt-dlp" }),
+    async (executable, args) => {
+      providerCalls.push([...args]);
+      throw new UrmaError(
+        "SOURCE_UNAVAILABLE",
+        "yt-dlp failed: ERROR: [youtube] HTTP Error 403: Forbidden",
+        { retryable: true },
+      );
+    },
+    testRemoteContext,
+  );
+  await assert.rejects(
+    provider.metadata("https://www.youtube.com/watch?v=video-id"),
+    /youtube.*403/u,
+  );
+  assert.equal(providerCalls.length, 1);
+  assert.equal(providerCalls[0]?.includes("--extractor-args"), false);
+});
+
+test("yt-dlp retries at most once and preserves source-unavailable when impersonation is unavailable", async () => {
+  const calls: string[][] = [];
+  let attempt = 0;
+  const ytdlp = new YtDlp(
+    loadConfig({ URMA_YTDLP: "yt-dlp" }),
+    async (executable, args) => {
+      calls.push([...args]);
+      attempt += 1;
+      if (attempt === 1) {
+        throw new UrmaError(
+          "SOURCE_UNAVAILABLE",
+          "yt-dlp failed: ERROR: [generic] Got HTTP Error 403 caused by Cloudflare anti-bot challenge; try again with --extractor-args \"generic:impersonate\"",
+          { retryable: true },
+        );
+      }
+      throw new UrmaError(
+        "SOURCE_UNAVAILABLE",
+        "yt-dlp failed: generic impersonation backend is unavailable",
+        { retryable: true },
+      );
+    },
+    testRemoteContext,
+  );
+
+  await assert.rejects(
+    ytdlp.metadata("https://example.test/video"),
+    (error: unknown) =>
+      error instanceof UrmaError &&
+      error.code === "SOURCE_UNAVAILABLE" &&
+      /impersonation backend is unavailable/u.test(error.message),
+  );
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]?.[calls[1]?.indexOf("--extractor-args") + 1], "generic:impersonate");
 });
 test("missing subprocess dependencies retain an explicit machine-readable failure", async (t) => {
   const directory = await fixture(t);

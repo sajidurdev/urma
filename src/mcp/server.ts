@@ -194,7 +194,14 @@ export function buildMcpServer(
   config: UrmaConfig,
 ): McpServer {
   const server = new McpServer(
-    { name: "urma", version: URMA_VERSION, icons: URMA_SERVER_ICONS },
+    {
+      name: "urma",
+      title: "Urma",
+      version: URMA_VERSION,
+      description: "Retrieve video captions and frames through MCP.",
+      websiteUrl: "https://github.com/sajidurdev/urma",
+      icons: URMA_SERVER_ICONS,
+    },
     { instructions: HOST_GUIDANCE },
   );
   server.registerTool(
