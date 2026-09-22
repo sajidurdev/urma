@@ -45,7 +45,7 @@ export type TargetReleaseManifest = Readonly<{
   licensing: Readonly<{ notices: readonly string[] }>;
 }>;
 
-const BTBN_RELEASE = "autobuild-2026-09-08-23-15";
+const BTBN_RELEASE = "autobuild-2026-09-22-13-18";
 const BTBN_NOTICE = `https://github.com/BtbN/FFmpeg-Builds/releases/tag/${BTBN_RELEASE}`;
 const YTDLP_VERSION = "2026.08.19";
 const YTDLP_NOTICE = `https://github.com/yt-dlp/yt-dlp/blob/${YTDLP_VERSION}/LICENSE`;
@@ -62,7 +62,7 @@ function btbN(
   return {
     kind: "ffmpeg",
     provider: "BtbN FFmpeg-Builds",
-    upstreamVersion: "N-126479-g08cd8df29d",
+    upstreamVersion: "N-126755-g52f05ac780",
     upstreamRelease: BTBN_RELEASE,
     url,
     archiveFormat: file.endsWith(".tar.xz") ? "tar.xz" : "zip",
@@ -197,30 +197,30 @@ function release(
 
 const linuxX64 = btbN(
   "linux-x64-glibc",
-  "ffmpeg-N-126479-g08cd8df29d-linux64-lgpl.tar.xz",
-  "47ecb2cda0e5608a047a30e4ead5f3dadf015eed7834a43557ce465e637e7ff6",
-  114617964,
+  "ffmpeg-N-126755-g52f05ac780-linux64-lgpl.tar.xz",
+  "0633931dc33051d458aeade95644930be9e03673d1bde8ee5264ef64d3a3a8e4",
+  138318052,
   "",
 );
 const linuxArm64 = btbN(
   "linux-arm64-glibc",
-  "ffmpeg-N-126479-g08cd8df29d-linuxarm64-lgpl.tar.xz",
-  "f9fb2ac984e6477fae8f066ca12bba89e8adaf4c5281a8c8d6096e1e572019d4",
-  99193348,
+  "ffmpeg-N-126755-g52f05ac780-linuxarm64-lgpl.tar.xz",
+  "967e786244c0ec29f5d8830053e6d78ce203bb6f8e986c0de03f740d38199c75",
+  117567856,
   "",
 );
 const windowsX64 = btbN(
   "windows-x64",
-  "ffmpeg-N-126479-g08cd8df29d-win64-lgpl.zip",
-  "8ebd8b419bf80bd6a04af6e5de2ec5b7dc4adf06c00f17c2fb201013d6d9f674",
-  148609312,
+  "ffmpeg-N-126755-g52f05ac780-win64-lgpl.zip",
+  "5e38777db1e69a8565f49619740394b2a5742dfdc3cec835a1ddf18b2a6cdb78",
+  172097692,
   ".exe",
 );
 const windowsArm64 = btbN(
   "windows-arm64",
-  "ffmpeg-N-126479-g08cd8df29d-winarm64-lgpl.zip",
-  "9a46e6761fc31f166ab15356c66c9f47d8c9128922b702044d4c99b1feb94670",
-  98456783,
+  "ffmpeg-N-126755-g52f05ac780-winarm64-lgpl.zip",
+  "170aa399507a308323c1b86a704a360f542acec8b67e26fd43ea1f17613f6a0e",
+  118810363,
   ".exe",
 );
 
