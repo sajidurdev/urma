@@ -124,6 +124,13 @@ Remote FFmpeg and ffprobe inputs receive the Safe Proxy explicitly and use the
 restricted protocol set `http,https,tcp,tls,httpproxy`. HTTP(S) operations
 cannot opt out of the proxy through a caller-provided option.
 
+Urma opens filesystem-backed media passed through the FFmpeg and ffprobe
+wrappers as read-only regular files. The child receives a seekable `fd:` input
+with `-protocol_whitelist fd`; a manifest cannot resolve another file or a
+network resource. Frame-panel and overview composition use generated or
+validated JPEG frames. Setup checks seeking, frame extraction, and rejection
+of a nested DASH file reference with the selected native tools.
+
 The subprocess runner bounds stdout and stderr, enforces deadlines, and reports
 timeouts, cancellation, output-limit breaches, and non-zero exits as explicit
 errors. A failed subprocess does not become a successful acquisition.

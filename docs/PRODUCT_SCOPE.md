@@ -15,9 +15,20 @@ whether it supports a conclusion.
 
 ### Source admission
 
+Urma uses yt-dlp to resolve public, finite, non-DRM video URLs. Before an RC or
+stable release, the compatibility gate requires six provider fixtures to pass:
+X / Twitter, Facebook Reel, Instagram Reel, Loom, Streamable, and Mux-hosted
+public HLS. Other sources are best effort; yt-dlp support alone does not
+guarantee that Urma can inspect a video.
+
+YouTube single-video URLs use a dedicated yt-dlp resolver path. YouTube is
+outside the six-provider release gate, and availability depends on upstream
+access.
+
+Urma accepts:
+
 - HTTP(S) remote video sources that pass the versioned remote policy and finite
   timeline validation.
-- Supported single-video YouTube URLs.
 - Local video files whose canonical paths are inside a root listed in
   `URMA_LOCAL_ROOTS`.
 - Local `.vtt` or `.srt` caption sidecars. When both exist for a local video,

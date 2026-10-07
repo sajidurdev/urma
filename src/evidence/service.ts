@@ -458,19 +458,22 @@ function searchPlan(query: string): SearchPlan {
   }
   return { normalized, tokens };
 }
-// FTS cannot prove normalized substring matches; use the bounded scan for evidence
+// Keep the scan bounded so a truncated miss is not presented as complete.
 function searchSegments(
   segments: readonly StoredSegment[],
   query: string,
   mode: "phrase" | "terms",
   candidateLimit: number,
+  normalizedBodies?: Array<string | undefined>,
 ): SearchSegmentsResult {
   const plan = searchPlan(query);
   const matches: StoredSegment[] = [];
   const scanLimit = Math.min(segments.length, MAX_TRANSCRIPT_SEARCH_SEGMENTS);
   for (let index = 0; index < scanLimit; index += 1) {
     const segment = segments[index]!;
-    const body = normalize(segment.text);
+    const body = normalizedBodies
+      ? (normalizedBodies[index] ??= normalize(segment.text))
+      : normalize(segment.text);
     const matched = mode === "phrase"
       ? body.includes(plan.normalized)
       : plan.tokens.every((token) => body.includes(token));
@@ -941,8 +944,10 @@ export class EvidenceService {
       }> = [];
       let order = 0;
       let candidateCountComplete = true;
+      const normalizedBodies: Array<string | undefined> | undefined =
+        requested.queries.length > 1 ? [] : undefined;
       for (const [queryIndex, query] of requested.queries.entries()) {
-        const search = searchSegments(all, query, mode, candidateLimit);
+        const search = searchSegments(all, query, mode, candidateLimit, normalizedBodies);
         candidateCountComplete &&= search.complete &&
           search.matches.length <= limit;
         const seen = new Set<number>();

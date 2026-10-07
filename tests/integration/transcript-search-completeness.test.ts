@@ -192,7 +192,6 @@ test("single search reports exact omission when the result cap hides eligible li
       },
     ],
   });
-  assert.equal(context.app.store.ftsEnabled, true);
   const result = await context.app.evidence.searchTranscript({
     investigationRef: context.investigationRef,
     query: "literal evidence",
@@ -209,7 +208,7 @@ test("single search reports exact omission when the result cap hides eligible li
   assert.equal(result.partial, true);
 });
 
-test("FTS-shaped term search reports candidate-cap truncation instead of trusting a hidden LIMIT", async (t) => {
+test("term search reports candidate-cap truncation", async (t) => {
   const context = await fixture(t, {
     tracks: [
       {
@@ -224,7 +223,6 @@ test("FTS-shaped term search reports candidate-cap truncation instead of trustin
       },
     ],
   });
-  assert.equal(context.app.store.ftsEnabled, true);
   const result = await context.app.evidence.searchTranscript({
     investigationRef: context.investigationRef,
     query: "candidate overflow",
@@ -238,7 +236,7 @@ test("FTS-shaped term search reports candidate-cap truncation instead of trustin
   assert.equal(result.partial, true);
 });
 
-test("substring fallback remains literal and bounded when FTS tokenization is insufficient", async (t) => {
+test("substring search remains literal and bounded", async (t) => {
   const context = await fixture(t, {
     tracks: [
       {
@@ -253,7 +251,6 @@ test("substring fallback remains literal and bounded when FTS tokenization is in
       },
     ],
   });
-  assert.equal(context.app.store.ftsEnabled, true);
   const result = await context.app.evidence.searchTranscript({
     investigationRef: context.investigationRef,
     query: "cat",
@@ -268,7 +265,7 @@ test("substring fallback remains literal and bounded when FTS tokenization is in
   assert.equal(result.partial, true);
 });
 
-test("CJK fallback reports bounded truncation instead of implying a complete miss", async (t) => {
+test("CJK search reports bounded truncation instead of implying a complete miss", async (t) => {
   const context = await fixture(t, {
     tracks: [
       {
@@ -383,7 +380,6 @@ test("batch global unique-hit cap reports exact omissions after deduplication", 
   if (!("queries" in result)) throw new Error("expected batch search output");
   assert.equal(result.hits.length, 20);
   assert.equal(result.candidateHitCount, 40);
-  assert.equal(result.candidateHitCount > result.hits.length, true);
   assert.equal(result.candidateCountComplete, true);
   assert.equal(result.omittedHits, 20);
   assert.equal(result.partial, true);

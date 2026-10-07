@@ -31,3 +31,27 @@ export async function remoteMediaInputArgs(
     proxyUrl,
   ];
 }
+
+export type SubprocessMediaInput = Readonly<{
+  args: readonly string[];
+  input: string;
+  inputFile?: string | undefined;
+}>;
+
+/** Keep filesystem media on an inherited regular-file descriptor, never a reusable path. */
+export async function subprocessMediaInput(
+  value: string,
+  context: RemoteOperationContext | null | undefined,
+): Promise<SubprocessMediaInput> {
+  if (mediaInputKind(value) === "remote") {
+    return {
+      args: await remoteMediaInputArgs(value, context),
+      input: value,
+    };
+  }
+  return {
+    args: ["-protocol_whitelist", "fd"],
+    input: "fd:",
+    inputFile: value,
+  };
+}

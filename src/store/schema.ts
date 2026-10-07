@@ -159,12 +159,3 @@ CREATE TABLE presentation_artifacts (
 );
 CREATE INDEX presentation_artifacts_authorization ON presentation_artifacts(artifact_id, presentation_id);
 `;
-
-export const CREATE_FTS = `
-CREATE VIRTUAL TABLE IF NOT EXISTS transcript_fts USING fts5(
-  text,
-  track_id UNINDEXED,
-  segment_id UNINDEXED,
-  tokenize='unicode61 remove_diacritics 2'
-);
-`;

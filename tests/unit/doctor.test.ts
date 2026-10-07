@@ -31,7 +31,6 @@ test("doctor does not create or migrate storage while diagnosing", async (t) => 
       "Urma",
       "Node",
       "SQLite",
-      "FTS5",
       "ffmpeg",
       "ffprobe",
       "yt-dlp",

@@ -119,7 +119,6 @@ export type StoredPresentation = Readonly<{
 }>;
 
 export interface UrmaStore {
-  readonly ftsEnabled: boolean;
   close(): void;
   putSourceSnapshot(input: Readonly<{
     source: Omit<StoredSource, "createdAt">;
@@ -145,11 +144,6 @@ export interface UrmaStore {
     trackId: string,
     startMs?: number,
     endMs?: number,
-  ): StoredSegment[];
-  searchTranscriptSegments(
-    trackId: string,
-    query: string,
-    limit: number,
   ): StoredSegment[];
   putArtifact(
     artifact: StoredArtifact,

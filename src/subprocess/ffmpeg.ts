@@ -3,7 +3,7 @@ import type { UrmaConfig } from "../config.js";
 import { UrmaError } from "../core/errors.js";
 import type { RemoteOperationContext } from "../remote/worker.js";
 import { runChecked, type ProcessResult, type RunOptions } from "./runner.js";
-import { remoteMediaInputArgs } from "./remote-media.js";
+import { subprocessMediaInput } from "./remote-media.js";
 import { verifyRuntimeTool } from "../distribution/integrity.js";
 
 export class Ffmpeg {
@@ -37,17 +37,17 @@ export class Ffmpeg {
   ): Promise<void> {
     await verifyRuntimeTool(this.config, "ffmpeg");
     await rm(output, { force: true });
-    const remoteArgs = await remoteMediaInputArgs(media, this.remoteContext);
+    const mediaInput = await subprocessMediaInput(media, this.remoteContext);
     await this.runner(
       this.config.ffmpeg,
       [
-        ...remoteArgs,
+        ...mediaInput.args,
         "-v",
         "error",
         "-ss",
         (atMs / 1000).toFixed(3),
         "-i",
-        media,
+        mediaInput.input,
         "-frames:v",
         "1",
         "-pix_fmt",
@@ -62,6 +62,7 @@ export class Ffmpeg {
         maxStdoutBytes: 512 * 1024,
         maxStderrBytes: this.config.limits.subprocessStderrBytes,
         signal,
+        inputFile: mediaInput.inputFile,
         debug: this.config.debug,
         label: "ffmpeg",
         diagnosticRole: "ffmpeg-exact-frame",
@@ -86,15 +87,15 @@ export class Ffmpeg {
     signal?: AbortSignal,
   ): Promise<void> {
     await verifyRuntimeTool(this.config, "ffmpeg");
-    const remoteArgs = await remoteMediaInputArgs(image, this.remoteContext);
+    const mediaInput = await subprocessMediaInput(image, this.remoteContext);
     await this.runner(
       this.config.ffmpeg,
       [
-        ...remoteArgs,
+        ...mediaInput.args,
         "-v",
         "error",
         "-i",
-        image,
+        mediaInput.input,
         "-vf",
         `crop=${crop.width}:${crop.height}:${crop.x}:${crop.y}`,
         "-frames:v",
@@ -111,6 +112,7 @@ export class Ffmpeg {
         maxStdoutBytes: 512 * 1024,
         maxStderrBytes: this.config.limits.subprocessStderrBytes,
         signal,
+        inputFile: mediaInput.inputFile,
         debug: this.config.debug,
         label: "ffmpeg",
         diagnosticRole: "ffmpeg-panel",
