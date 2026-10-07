@@ -13,7 +13,7 @@ import {
   stableJson,
 } from "../core/ids.js";
 import { UrmaError } from "../core/errors.js";
-import { CREATE_FTS, CURRENT_SCHEMA, SCHEMA_VERSION } from "./schema.js";
+import { CURRENT_SCHEMA, SCHEMA_VERSION } from "./schema.js";
 import type {
   StoredAcquisition,
   StoredArtifact,
@@ -242,7 +242,6 @@ function presentedArtifactIds(value: StoredPresentation): ArtifactId[] {
 }
 
 export class SqliteStore implements UrmaStore {
-  readonly ftsEnabled: boolean;
   readonly #db: DatabaseSync;
 
   private constructor(databasePath: string) {
@@ -299,12 +298,6 @@ export class SqliteStore implements UrmaStore {
         this.#db.close();
         throw incompatibleSchema(mismatch);
       }
-    }
-    try {
-      this.#db.exec(CREATE_FTS);
-      this.ftsEnabled = true;
-    } catch {
-      this.ftsEnabled = false;
     }
   }
 
@@ -573,31 +566,20 @@ export class SqliteStore implements UrmaStore {
           track.acquiredAt,
           JSON.stringify(track.metadata),
         );
-      if (this.ftsEnabled) {
-        this.#db
-          .prepare("DELETE FROM transcript_fts WHERE track_id=?")
-          .run(track.id);
-      }
       this.#db
         .prepare("DELETE FROM transcript_segments WHERE track_id=?")
         .run(track.id);
       const insert = this.#db.prepare(
         "INSERT INTO transcript_segments(track_id,start_ms,end_ms,text,ordinal) VALUES(?,?,?,?,?)",
       );
-      const insertFts = this.ftsEnabled
-        ? this.#db.prepare(
-          "INSERT INTO transcript_fts(text,track_id,segment_id) VALUES(?,?,?)",
-        )
-        : null;
       for (const segment of segments) {
-        const result = insert.run(
+        insert.run(
           track.id,
           segment.startMs,
           segment.endMs,
           segment.text,
           segment.ordinal,
         );
-        insertFts?.run(segment.text, track.id, Number(result.lastInsertRowid));
       }
     });
   }
@@ -624,35 +606,6 @@ export class SqliteStore implements UrmaStore {
       startMs,
       endMs,
     ).map(segmentFromRow);
-  }
-
-  // Probe FTS capability at the storage layer only
-  // EvidenceService uses the bounded fallback because LIMIT cannot prove completeness
-  searchTranscriptSegments(
-    trackId: string,
-    query: string,
-    limit: number,
-  ): StoredSegment[] {
-    if (this.ftsEnabled) {
-      try {
-        return this.#all(
-          this.#db.prepare(
-            `SELECT s.* FROM transcript_fts f JOIN transcript_segments s ON s.id=f.segment_id WHERE f.track_id=? AND transcript_fts MATCH ? ORDER BY rank,s.ordinal LIMIT ?`,
-          ),
-          trackId,
-          query,
-          limit,
-        ).map(segmentFromRow);
-      } catch {
-        /* use the deterministic fallback for punctuation-heavy literal queries */
-      }
-    }
-    const needle = query.normalize("NFKC").toLowerCase();
-    return this.listTranscriptSegments(trackId)
-      .filter((segment) =>
-        segment.text.normalize("NFKC").toLowerCase().includes(needle)
-      )
-      .slice(0, limit);
   }
 
   putArtifact(

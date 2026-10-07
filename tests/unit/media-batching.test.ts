@@ -233,11 +233,10 @@ for (const count of [4, 8, 12]) {
   test(`constructs one exact multi-section invocation for ${count} requirements`, async (t) => {
     const ctx = await fixture(t);
     const requested = requirements(ctx.resolved, ctx.ref, count);
-    const calls: readonly string[][] = [];
-    const mutableCalls = calls as string[][];
+    const calls: string[][] = [];
     const downloader = {
       run: async (args: readonly string[]) => {
-        mutableCalls.push([...args]);
+        calls.push([...args]);
         const outputDirectory = String(args[args.indexOf("--paths") + 1]);
         const lines: string[] = [];
         for (const range of [...rangeArguments(args)].reverse()) {
@@ -258,9 +257,9 @@ for (const count of [4, 8, 12]) {
       downloader,
     ).sections(requested);
     assert(outcomes.every((outcome) => outcome.status === "fulfilled"));
-    assert.equal(mutableCalls.length, 1);
+    assert.equal(calls.length, 1);
     assert.deepEqual(
-      rangeArguments(mutableCalls[0]!),
+      rangeArguments(calls[0]!),
       requested.map(({ startMs, endMs }) => ({ startMs, endMs })),
     );
     assert.deepEqual(

@@ -183,10 +183,16 @@ is recorded per investigation.
 
 ### Source and caption inputs
 
+Urma uses yt-dlp to resolve public, finite, non-DRM video URLs. For RC and
+stable releases, six provider fixtures must pass the
+[compatibility gate](docs/PRODUCT_SCOPE.md#source-admission).
+Other providers are best effort; yt-dlp support alone does not guarantee that
+Urma can inspect a video. YouTube single-video URLs use a dedicated resolver
+path and are outside the six-provider gate.
+
 Urma accepts:
 
 - A generic HTTP(S) video URL admitted by the remote source policy.
-- A supported single-video YouTube URL.
 - A local video path under a root listed in `URMA_LOCAL_ROOTS`.
 
 Local caption sidecars are optional. Urma checks the video basename with `.vtt`
@@ -361,7 +367,7 @@ In PowerShell, prefix the quoted executable path with `&`:
 & "C:\path\to\node.exe" "C:\path\to\Urma\launcher-v1.mjs" doctor
 ```
 
-Doctor checks the selected runtime, Node version, SQLite/FTS5, native-tool
+Doctor checks the selected runtime, Node version, SQLite, native-tool
 versions, storage, blob access, local roots, and frame-schedule limits. It
 prints its report to stderr and exits with status 0 when no check fails
 (warnings are allowed), or 1 when a check fails.
@@ -395,10 +401,11 @@ model. It supports finite videos without authentication or DRM. See
 
 Local paths require explicit allowed roots. Remote HTTP(S) work uses a
 process-local Safe Proxy that validates destinations and DNS results before
-connecting. Installed native tools are receipt-bound and hash-checked before
-first use. Subprocesses use argument arrays, `shell: false`, an allowlisted
-environment, bounded output, deadlines, cancellation, and process-tree
-cleanup.
+connecting. Filesystem-backed probe and extraction inputs are passed to FFmpeg
+and ffprobe through a file descriptor with an `fd`-only protocol allowlist.
+Installed native tools are receipt-bound and hash-checked before first use.
+Subprocesses use argument arrays, `shell: false`, an allowlisted environment,
+bounded output, deadlines, cancellation, and process-tree cleanup.
 
 These controls protect the local application boundary under the trusted
 Node/FFmpeg/ffprobe/yt-dlp runtime model. They are not an operating-system

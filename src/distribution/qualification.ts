@@ -1,9 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { UrmaError } from "../core/errors.js";
 import { hermeticYtDlpArgs } from "../subprocess/ytdlp.js";
-import { runChecked, type ProcessResult } from "../subprocess/runner.js";
+import { runChecked, type ProcessResult, type RunOptions } from "../subprocess/runner.js";
 import type { TargetReleaseManifest } from "./manifest.js";
 
 export type QualificationContext = Readonly<{
@@ -34,8 +34,10 @@ function command(
   executable: string,
   args: readonly string[],
   timeoutMs = 60_000,
+  options: RunOptions = {},
 ): Promise<ProcessResult> {
   return (context.runner ?? runChecked)(executable, args, {
+    ...options,
     timeoutMs,
     maxStdoutBytes: 8 * 1024 * 1024,
     maxStderrBytes: 8 * 1024 * 1024,
@@ -98,36 +100,90 @@ export async function qualifyNativeTools(context: QualificationContext): Promise
     checks.push("generated-local-fixture");
 
     const inspected = parsedJson(await command(context, context.ffprobe, [
-      "-v", "error", "-show_format", "-show_streams", "-of", "json", video,
-    ]), "ffprobe");
+      "-protocol_whitelist", "fd", "-v", "error", "-show_format",
+      "-show_streams", "-of", "json", "fd:",
+    ], 60_000, { inputFile: video }), "ffprobe");
     const dimensions = videoDimensions(inspected, "ffprobe fixture inspection");
     if (dimensions.width !== 160 || dimensions.height !== 90) throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", `ffprobe reported ${String(dimensions.width)}x${String(dimensions.height)}, expected 160x90`);
     checks.push("ffprobe-container-and-stream-inspection");
 
     await command(context, context.ffmpeg, [
-      "-v", "error", "-ss", "0.250", "-i", video,
+      "-protocol_whitelist", "fd", "-v", "error", "-ss", "0.250", "-i", "fd:",
       "-frames:v", "1", "-vf", "scale=160:90", "-pix_fmt", "yuvj420p", "-q:v", "2", "-f", "image2", "-y", jpeg,
-    ]);
+    ], 60_000, { inputFile: video });
     await assertFile(jpeg, "FFmpeg JPEG seek/decode");
     assertJpeg(await readFile(jpeg), "FFmpeg JPEG seek/decode");
-    const jpegInfo = videoDimensions(parsedJson(await command(context, context.ffprobe, ["-v", "error", "-show_streams", "-of", "json", jpeg]), "ffprobe JPEG inspection"), "ffprobe JPEG inspection");
+    const jpegInfo = videoDimensions(parsedJson(await command(context, context.ffprobe, [
+      "-protocol_whitelist", "fd", "-v", "error", "-show_streams", "-of", "json", "fd:",
+    ], 60_000, { inputFile: jpeg }), "ffprobe JPEG inspection"), "ffprobe JPEG inspection");
     if (jpegInfo.width !== 160 || jpegInfo.height !== 90) throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", "FFmpeg JPEG dimensions did not survive qualification");
     checks.push("ffmpeg-seek-decode-jpeg");
 
     await command(context, context.ffmpeg, [
-      "-v", "error", "-i", jpeg,
+      "-protocol_whitelist", "fd", "-v", "error", "-i", "fd:",
       "-vf", "scale=120:90,crop=80:60:0:0,tile=1x1",
       "-frames:v", "1", "-pix_fmt", "yuvj420p", "-q:v", "2", "-f", "image2", "-y", cropped,
-    ]);
+    ], 60_000, { inputFile: jpeg });
     await assertFile(cropped, "FFmpeg scale/crop/tile operation");
     assertJpeg(await readFile(cropped), "FFmpeg scale/crop/tile operation");
     const cropInfo = videoDimensions(parsedJson(await command(context, context.ffprobe, ["-v", "error", "-show_streams", "-of", "json", cropped]), "ffprobe cropped JPEG inspection"), "ffprobe cropped JPEG inspection");
     if (cropInfo.width !== 80 || cropInfo.height !== 60) throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", `FFmpeg crop output was ${String(cropInfo.width)}x${String(cropInfo.height)}, expected 80x60`);
     checks.push("ffmpeg-scale-crop-tile");
 
-    const timing = parsedJson(await command(context, context.ffprobe, ["-v", "error", "-read_intervals", "%+#2", "-show_frames", "-of", "json", video]), "ffprobe timing inspection");
+    const timing = parsedJson(await command(context, context.ffprobe, [
+      "-protocol_whitelist", "fd", "-v", "error", "-read_intervals", "%+#2",
+      "-show_frames", "-of", "json", "fd:",
+    ], 60_000, { inputFile: video }), "ffprobe timing inspection");
     if (!Array.isArray(timing.frames) || timing.frames.length < 1) throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", "ffprobe returned no decoded timing frames");
     checks.push("ffprobe-seek-and-timing");
+
+    const dashDirectory = path.join(fixtureRoot, "segments");
+    const blobDirectory = path.join(fixtureRoot, "blobs");
+    await mkdir(dashDirectory, { recursive: true, mode: 0o700 });
+    await mkdir(blobDirectory, { recursive: true, mode: 0o700 });
+    await command(context, context.ffmpeg, [
+      "-v", "error", "-i", video, "-an", "-c:v", "mpeg4", "-f", "dash",
+      "-seg_duration", "1", "-y", "manifest.mpd",
+    ], 60_000, { cwd: dashDirectory });
+    const dashFiles = await readdir(dashDirectory);
+    const initialization = dashFiles.find((file) => /^init-stream0.*\.m4s$/u.test(file));
+    const segment = dashFiles.find((file) => /^chunk-stream0-.*\.m4s$/u.test(file));
+    if (initialization === undefined || segment === undefined) {
+      throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", "FFmpeg did not produce the DASH files needed for filesystem-boundary qualification");
+    }
+    const dashManifest = await readFile(path.join(dashDirectory, "manifest.mpd"), "utf8");
+    const nestedManifest = dashManifest
+      .replace(/initialization="[^"]+"/u, `initialization="../segments/${initialization}"`)
+      .replace(/media="[^"]+"/u, `media="../segments/${segment}"`);
+    if (nestedManifest === dashManifest) {
+      throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", "FFmpeg emitted an unexpected DASH manifest during filesystem-boundary qualification");
+    }
+    const nestedManifestPath = path.join(blobDirectory, "nested-media");
+    await writeFile(nestedManifestPath, nestedManifest);
+    const nested = parsedJson(await command(context, context.ffprobe, [
+      "-v", "error", "-show_streams", "-of", "json", nestedManifestPath,
+    ]), "ffprobe nested-file control");
+    const nestedDimensions = videoDimensions(nested, "ffprobe nested-file control");
+    if (nestedDimensions.width !== 160 || nestedDimensions.height !== 90) {
+      throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", "ffprobe did not read the generated DASH file outside its manifest directory");
+    }
+    let nestedFileDenied = false;
+    try {
+      const guarded = await command(context, context.ffprobe, [
+        "-protocol_whitelist", "fd", "-v", "error", "-show_streams",
+        "-of", "json", "fd:",
+      ], 60_000, { inputFile: nestedManifestPath });
+      nestedFileDenied = guarded.code !== 0;
+    } catch (error) {
+      if (!(error instanceof UrmaError) || error.code !== "SOURCE_UNAVAILABLE") {
+        throw error;
+      }
+      nestedFileDenied = true;
+    }
+    if (!nestedFileDenied) {
+      throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", "ffprobe followed a nested filesystem reference despite the fd-only protocol whitelist");
+    }
+    checks.push("ffprobe-fd-blocks-nested-files");
 
     const ffmpegBuildConfiguration = parseFfmpegBuildConfiguration(
       await command(context, context.ffmpeg, ["-hide_banner", "-buildconf"], 30_000),
@@ -160,7 +216,7 @@ export async function qualifyNativeTools(context: QualificationContext): Promise
     checks.push("ytdlp-hermetic-cli-profile");
     await command(context, context.ytdlp, hermeticYtDlpArgs(["--version"], context.nodeExecutable, undefined, ["--ffmpeg-location", path.dirname(context.ffmpeg)]), 30_000);
     checks.push("ytdlp-standalone-start-and-node-runtime");
-    return { fixtureVersion: "v1-video-evidence-fixture-1", checks, ffmpegBuildConfiguration, ffprobeBuildConfiguration };
+    return { fixtureVersion: "v1-video-evidence-fixture-2", checks, ffmpegBuildConfiguration, ffprobeBuildConfiguration };
   } finally {
     await rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
   }

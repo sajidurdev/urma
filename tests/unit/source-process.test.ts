@@ -29,6 +29,7 @@ import {
   allowlistedEnvironment,
   runChecked,
   runProcess,
+  type RunOptions,
 } from "../../src/subprocess/runner.js";
 import { hermeticYtDlpArgs, YtDlp } from "../../src/subprocess/ytdlp.js";
 
@@ -1006,10 +1007,15 @@ test("remote yt-dlp and media profiles install only Urma's Safe Proxy", async (t
 
   const directory = await fixture(t);
   const output = path.join(directory, "frame.jpg");
-  const calls: readonly string[][] = [];
   const captured: string[][] = [];
-  const runner = async (executable: string, command: readonly string[]) => {
+  const capturedOptions: Array<RunOptions | undefined> = [];
+  const runner = async (
+    executable: string,
+    command: readonly string[],
+    options?: RunOptions,
+  ) => {
     captured.push([executable, ...command]);
+    capturedOptions.push(options);
     const outputIndex = command.indexOf("-y");
     if (outputIndex >= 0 && typeof command[outputIndex + 1] === "string") {
       await writeFile(command[outputIndex + 1]!, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
@@ -1031,7 +1037,6 @@ test("remote yt-dlp and media profiles install only Urma's Safe Proxy", async (t
   await new Ffprobe(loadConfig(), testRemoteContext, runner).inspect(
     "https://cdn.example.test/video.mp4",
   );
-  assert.equal(calls.length, 0);
   assert.equal(captured.length, 2);
   for (const command of captured) {
     assert.equal(command.includes("-http_proxy"), true);
@@ -1039,10 +1044,119 @@ test("remote yt-dlp and media profiles install only Urma's Safe Proxy", async (t
     assert.equal(command.includes("-protocol_whitelist"), true);
     assert.equal(command.includes("http,https,tcp,tls,httpproxy"), true);
     assert.equal(command.includes("file"), false);
+    assert.equal(command.includes("fd:"), false);
   }
+  assert.equal(capturedOptions.every((options) => options?.inputFile === undefined), true);
   assert.deepEqual(await remoteMediaInputArgs("/tmp/local.mp4", testRemoteContext), []);
   await assert.rejects(
     remoteMediaInputArgs("file:///tmp/local.mp4", testRemoteContext),
     /HTTP\(S\)|unsupported/u,
   );
+});
+
+test("filesystem-backed media reaches FFmpeg and FFprobe only through fd input", async (t) => {
+  const directory = await fixture(t);
+  const localMedia = path.join(directory, "local.mp4");
+  const output = path.join(directory, "frame.jpg");
+  await writeFile(localMedia, "local media fixture");
+  const captured: Array<{
+    executable: string;
+    args: readonly string[];
+    options: (RunOptions & { inputFile?: string | undefined }) | undefined;
+  }> = [];
+  const runner = async (
+    executable: string,
+    args: readonly string[],
+    options?: RunOptions,
+  ) => {
+    captured.push({
+      executable,
+      args,
+      options: options as (RunOptions & { inputFile?: string | undefined }) | undefined,
+    });
+    const outputIndex = args.indexOf("-y");
+    if (outputIndex >= 0) {
+      await writeFile(args[outputIndex + 1]!, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    }
+    return {
+      executable,
+      args,
+      code: 0,
+      stdout: Buffer.from(JSON.stringify({ streams: [], format: {} })),
+      stderr: Buffer.alloc(0),
+      wallMs: 1,
+    };
+  };
+
+  await new Ffmpeg(loadConfig(), null, runner).extractJpeg(localMedia, 100, output);
+  await new Ffprobe(loadConfig(), null, runner).inspect(localMedia);
+
+  assert.equal(captured.length, 2);
+  for (const call of captured) {
+    assert.equal(call.options?.inputFile, localMedia);
+    assert.equal(call.args.includes("fd:"), true);
+    const whitelistIndex = call.args.indexOf("-protocol_whitelist");
+    assert.notEqual(whitelistIndex, -1);
+    assert.equal(call.args[whitelistIndex + 1], "fd");
+    assert.equal(call.args.includes(localMedia), false);
+  }
+});
+
+test("runProcess passes regular-file input to the child as a seekable stdin descriptor", async (t) => {
+  const directory = await fixture(t);
+  const input = path.join(directory, "input.bin");
+  await writeFile(input, "descriptor input remains seekable");
+  const result = await runProcess(
+    process.execPath,
+    [
+      "-e",
+      "const fs=require('node:fs');process.stdout.write(JSON.stringify({isFile:fs.fstatSync(0).isFile(),text:fs.readFileSync(0,'utf8')}))",
+    ],
+    { inputFile: input },
+  );
+
+  assert.equal(result.code, 0);
+  assert.deepEqual(JSON.parse(result.stdout.toString("utf8")), {
+    isFile: true,
+    text: "descriptor input remains seekable",
+  });
+  await assert.rejects(
+    runProcess(process.execPath, ["-e", "process.exit(0)"], { inputFile: directory }),
+    (error: unknown) =>
+      error instanceof UrmaError && error.code === "INVALID_SOURCE",
+  );
+  await assert.rejects(
+    runProcess(process.execPath, ["-e", "process.exit(0)"], {
+      inputFile: path.join(directory, "missing.bin"),
+    }),
+    (error: unknown) =>
+      error instanceof UrmaError &&
+      error.code === "SOURCE_UNAVAILABLE" &&
+      !error.message.includes(directory),
+  );
+});
+
+test("runProcess rejects FIFOs without waiting for a writer", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const directory = await fixture(t);
+  const fifo = path.join(directory, "input.fifo");
+  let created;
+  try {
+    created = await runProcess("mkfifo", [fifo]);
+  } catch {
+    t.skip("mkfifo is unavailable in this test environment");
+    return;
+  }
+  if (created.code !== 0) {
+    t.skip("mkfifo could not create a fixture in the temporary directory");
+    return;
+  }
+  const started = performance.now();
+  await assert.rejects(
+    runProcess(process.execPath, ["-e", "process.exit(0)"], { inputFile: fifo }),
+    (error: unknown) =>
+      error instanceof UrmaError && error.code === "INVALID_SOURCE",
+  );
+  assert.ok(performance.now() - started < 1_000);
 });

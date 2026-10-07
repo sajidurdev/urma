@@ -1,4 +1,9 @@
-import { spawn } from "node:child_process";
+import {
+  spawn,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
+import { constants } from "node:fs";
+import { lstat, open, type FileHandle } from "node:fs/promises";
 import {
   debugFromEnvironment,
   diagnosticLog,
@@ -23,6 +28,8 @@ export type RunOptions = Readonly<{
   maxStdoutBytes?: number | undefined;
   maxStderrBytes?: number | undefined;
   signal?: AbortSignal | undefined;
+  /** Open read-only and expose only as child stdin; callers must pair this with a fixed fd: input. */
+  inputFile?: string | undefined;
   debug?: boolean | undefined;
   label?: string | undefined;
   diagnosticRole?: string | undefined;
@@ -81,6 +88,45 @@ function terminateTree(pid: number | undefined): void {
   }
 }
 
+async function openRegularInput(file: string): Promise<FileHandle> {
+  if (file.length === 0 || file.includes("\0")) {
+    throw new UrmaError(
+      "INVALID_SOURCE",
+      "Subprocess media input path must be non-empty and contain no null bytes",
+    );
+  }
+  let handle: FileHandle | undefined;
+  try {
+    const pathInfo = await lstat(file);
+    if (!pathInfo.isFile()) {
+      throw new UrmaError(
+        "INVALID_SOURCE",
+        "Subprocess media input must be a readable regular file",
+      );
+    }
+    const flags = process.platform === "win32"
+      ? "r"
+      : constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
+    handle = await open(file, flags);
+    const info = await handle.stat();
+    if (!info.isFile()) {
+      throw new UrmaError(
+        "INVALID_SOURCE",
+        "Subprocess media input must be a readable regular file",
+      );
+    }
+    return handle;
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    if (error instanceof UrmaError) throw error;
+    throw new UrmaError(
+      "SOURCE_UNAVAILABLE",
+      "Subprocess media input could not be opened as a readable regular file",
+      { cause: error },
+    );
+  }
+}
+
 export async function runProcess(
   executable: string,
   args: readonly string[],
@@ -114,137 +160,151 @@ export async function runProcess(
       `Subprocess ${executable} was cancelled before it started`,
     );
   }
-  const started = performance.now();
-  return await new Promise<ProcessResult>((resolve, reject) => {
-    const childEnvironment = allowlistedEnvironment(options.env ?? process.env);
-    assertNoProxyEnvironment(childEnvironment);
-    const child = spawn(executable, [...args], {
-      cwd: options.cwd,
-      env: childEnvironment,
-      shell: false,
-      windowsHide: true,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let reason: "timeout" | "cancelled" | "stdout" | "stderr" | null = null;
-    let settled = false;
-    const stop = (next: typeof reason) => {
-      if (reason === null) reason = next;
-      terminateTree(child.pid);
-    };
-    const timer = setTimeout(() => stop("timeout"), timeoutMs);
-    timer.unref();
-    const onAbort = () => stop("cancelled");
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdoutBytes += chunk.length;
-      if (stdoutBytes > maxStdout) {
-        stop("stdout");
-        return;
-      }
-      stdout.push(chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderrBytes += chunk.length;
-      if (stderrBytes > maxStderr) {
-        stop("stderr");
-        return;
-      }
-      stderr.push(chunk);
-    });
-    const cleanup = () => {
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", onAbort);
-    };
-    child.once("error", (error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      const wallMs = Math.round(performance.now() - started);
-      recordDiagnosticSubprocess(label, wallMs, options.diagnosticRole);
-      diagnosticLog(debug, "subprocess", {
-        name: label,
-        status: "start-failed",
-        exitCode: null,
-        wallMs,
-        stdoutBytes,
-        stderrBytes,
-      });
-      const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
-      reject(
-        new UrmaError(
-          missing ? "REQUIRED_BINARY_MISSING" : "INTERNAL_ERROR",
-          missing
-            ? `Required executable ${
-              JSON.stringify(executable)
-            } was not found; install it or configure its URMA_* path override`
-            : `Could not start executable ${
-              JSON.stringify(executable)
-            }; verify the configured path and permissions`,
-          { cause: error },
-        ),
+  let inputHandle: FileHandle | undefined;
+  try {
+    if (options.inputFile !== undefined) {
+      inputHandle = await openRegularInput(options.inputFile);
+    }
+    if (options.signal?.aborted) {
+      throw new UrmaError(
+        "CANCELLED",
+        `Subprocess ${executable} was cancelled before it started`,
       );
-    });
-    child.once("close", (code) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      const wallMs = Math.round(performance.now() - started);
-      recordDiagnosticSubprocess(label, wallMs, options.diagnosticRole);
-      diagnosticLog(debug, "subprocess", {
-        name: label,
-        status: reason ?? (code === 0 ? "succeeded" : "failed"),
-        exitCode: code ?? null,
-        wallMs,
-        stdoutBytes,
-        stderrBytes,
-      });
-      const detail = {
-        retryable: true,
-        detail: { executable, args: redactArgs(args) },
+    }
+    const started = performance.now();
+    return await new Promise<ProcessResult>((resolve, reject) => {
+      const childEnvironment = allowlistedEnvironment(options.env ?? process.env);
+      assertNoProxyEnvironment(childEnvironment);
+      const child = spawn(executable, [...args], {
+        cwd: options.cwd,
+        env: childEnvironment,
+        shell: false,
+        windowsHide: true,
+        detached: process.platform !== "win32",
+        stdio: [inputHandle?.fd ?? "ignore", "pipe", "pipe"],
+      }) as ChildProcessWithoutNullStreams;
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
+      let reason: "timeout" | "cancelled" | "stdout" | "stderr" | null = null;
+      let settled = false;
+      const stop = (next: typeof reason) => {
+        if (reason === null) reason = next;
+        terminateTree(child.pid);
       };
-      if (reason === "timeout") {
-        reject(
-          new UrmaError(
-            "MEDIA_ACQUISITION_TIMEOUT",
-            `${executable} exceeded its ${timeoutMs} ms timeout and its process tree was terminated`,
-            detail,
-          ),
-        );
-      } else if (reason === "cancelled") {
-        reject(
-          new UrmaError(
-            "CANCELLED",
-            `${executable} was cancelled and its process tree was terminated`,
-            detail,
-          ),
-        );
-      } else if (reason === "stdout" || reason === "stderr") {
-        reject(
-          new UrmaError(
-            "OUTPUT_LIMIT_EXCEEDED",
-            `${executable} ${reason} exceeded its ${
-              reason === "stdout" ? maxStdout : maxStderr
-            }-byte safety limit and its process tree was terminated`,
-            detail,
-          ),
-        );
-      } else {
-        resolve({
-          executable,
-          args: [...args],
-          code: code ?? -1,
-          stdout: Buffer.concat(stdout),
-          stderr: Buffer.concat(stderr),
+      const timer = setTimeout(() => stop("timeout"), timeoutMs);
+      timer.unref();
+      const onAbort = () => stop("cancelled");
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdoutBytes += chunk.length;
+        if (stdoutBytes > maxStdout) {
+          stop("stdout");
+          return;
+        }
+        stdout.push(chunk);
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderrBytes += chunk.length;
+        if (stderrBytes > maxStderr) {
+          stop("stderr");
+          return;
+        }
+        stderr.push(chunk);
+      });
+      const cleanup = () => {
+        clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onAbort);
+      };
+      child.once("error", (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        const wallMs = Math.round(performance.now() - started);
+        recordDiagnosticSubprocess(label, wallMs, options.diagnosticRole);
+        diagnosticLog(debug, "subprocess", {
+          name: label,
+          status: "start-failed",
+          exitCode: null,
           wallMs,
+          stdoutBytes,
+          stderrBytes,
         });
-      }
+        const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+        reject(
+          new UrmaError(
+            missing ? "REQUIRED_BINARY_MISSING" : "INTERNAL_ERROR",
+            missing
+              ? `Required executable ${
+                JSON.stringify(executable)
+              } was not found; install it or configure its URMA_* path override`
+              : `Could not start executable ${
+                JSON.stringify(executable)
+              }; verify the configured path and permissions`,
+            { cause: error },
+          ),
+        );
+      });
+      child.once("close", (code) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        const wallMs = Math.round(performance.now() - started);
+        recordDiagnosticSubprocess(label, wallMs, options.diagnosticRole);
+        diagnosticLog(debug, "subprocess", {
+          name: label,
+          status: reason ?? (code === 0 ? "succeeded" : "failed"),
+          exitCode: code ?? null,
+          wallMs,
+          stdoutBytes,
+          stderrBytes,
+        });
+        const detail = {
+          retryable: true,
+          detail: { executable, args: redactArgs(args) },
+        };
+        if (reason === "timeout") {
+          reject(
+            new UrmaError(
+              "MEDIA_ACQUISITION_TIMEOUT",
+              `${executable} exceeded its ${timeoutMs} ms timeout and its process tree was terminated`,
+              detail,
+            ),
+          );
+        } else if (reason === "cancelled") {
+          reject(
+            new UrmaError(
+              "CANCELLED",
+              `${executable} was cancelled and its process tree was terminated`,
+              detail,
+            ),
+          );
+        } else if (reason === "stdout" || reason === "stderr") {
+          reject(
+            new UrmaError(
+              "OUTPUT_LIMIT_EXCEEDED",
+              `${executable} ${reason} exceeded its ${
+                reason === "stdout" ? maxStdout : maxStderr
+              }-byte safety limit and its process tree was terminated`,
+              detail,
+            ),
+          );
+        } else {
+          resolve({
+            executable,
+            args: [...args],
+            code: code ?? -1,
+            stdout: Buffer.concat(stdout),
+            stderr: Buffer.concat(stderr),
+            wallMs,
+          });
+        }
+      });
     });
-  });
+  } finally {
+    await inputHandle?.close().catch(() => undefined);
+  }
 }
 
 export async function runChecked(

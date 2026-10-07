@@ -89,8 +89,14 @@ Linux requires glibc. The data root must be a user-owned local filesystem path.
 
 The resolver admits `local` and `remote` sources.
 
-YouTube is normalized as a remote source. A logical source reference identifies
-the source identity rather than a particular delivery URL:
+Remote URLs use yt-dlp. YouTube single-video URLs enter a dedicated resolver
+branch that checks the requested video ID. Other HTTP(S) URLs use the generic
+remote branch. Both apply the remote source policy and finite timeline checks.
+See [Product scope](PRODUCT_SCOPE.md#source-admission) for the release gate and
+other source limits.
+
+A logical source reference identifies the source identity rather than a
+particular delivery URL:
 
 ```text
 urma:source:local:<32 lowercase hexadecimal characters>
@@ -259,6 +265,9 @@ and ffprobe HTTP(S) inputs receive an explicit proxy and a
 restricted protocol allowlist. Child environments are allowlisted, and proxy
 configuration is rejected from those environments. Native executables are
 generation-local and receipt-bound.
+
+Filesystem-backed media sent to FFmpeg or ffprobe for inspection or frame
+extraction uses a seekable file descriptor and an `fd`-only protocol allowlist.
 
 Subprocess output, media, manifests, and caption data have independent byte
 limits. Timeouts and cancellation terminate the process tree. A failed or

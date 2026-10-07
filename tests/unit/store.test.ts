@@ -89,7 +89,6 @@ test("SQLite source cache persists while investigations remain isolated across r
     deriveInvestigationState(store, b).evidence.sparseVisualSets.length,
     0,
   );
-  assert.equal(store.ftsEnabled, true);
   store.close();
 });
 
@@ -162,9 +161,10 @@ test("investigations remain pinned when a logical source receives a refreshed sn
   store.close();
 });
 
-test("transcript storage uses FTS when available and deterministic literal fallback semantics", async (t) => {
+test("transcript storage persists cues without creating a full-text index", async (t) => {
   const directory = await fixture(t);
-  const store = await SqliteStore.open(path.join(directory, "urma.db"));
+  const dbPath = path.join(directory, "urma.db");
+  const store = await SqliteStore.open(dbPath);
   const sourceRef = remoteSourceRef(youtubeRemoteIdentity("yP0axVHdP-U"));
   const now = new Date(0).toISOString();
   putTestSource(store, {
@@ -204,12 +204,76 @@ test("transcript storage uses FTS when available and deterministic literal fallb
       },
     ],
   );
-  assert.equal(
-    store.searchTranscriptSegments("track", '"blue chart"', 5)[0]?.startMs,
-    0,
-  );
-  assert.equal(store.listTranscriptSegments("track", 4000, 8000).length, 1);
   store.close();
+  const database = new DatabaseSync(dbPath);
+  assert.equal(
+    database.prepare("SELECT name FROM sqlite_master WHERE name='transcript_fts'").get(),
+    undefined,
+  );
+  database.close();
+  const reopened = await SqliteStore.open(dbPath);
+  assert.deepEqual(
+    reopened.listTranscriptSegments("track").map((segment) => segment.text),
+    ["A blue chart appears", "Only narration here"],
+  );
+  assert.equal(reopened.listTranscriptSegments("track", 4000, 8000)[0]?.startMs, 5000);
+  reopened.close();
+});
+
+test("existing full-text tables are left untouched when writing transcripts", async (t) => {
+  const directory = await fixture(t);
+  const dbPath = path.join(directory, "urma.db");
+  const sourceRef = remoteSourceRef(youtubeRemoteIdentity("yP0axVHdP-U"));
+  const store = await SqliteStore.open(dbPath);
+  putTestSource(store, {
+    sourceRef,
+    kind: "remote",
+    canonicalKey: "yP0axVHdP-U",
+    revision: "r1",
+    title: "Fixture",
+    durationMs: 20_000,
+    metadata: {},
+  });
+  store.close();
+
+  const database = new DatabaseSync(dbPath);
+  try {
+    database.exec("CREATE VIRTUAL TABLE transcript_fts USING fts5(text, track_id UNINDEXED, segment_id UNINDEXED)");
+  } catch {
+    database.close();
+    t.skip("FTS5 is unavailable, so this database cannot have a legacy index");
+    return;
+  }
+  database.prepare("INSERT INTO transcript_fts(text,track_id,segment_id) VALUES(?,?,?)")
+    .run("legacy sentinel", "track", 1);
+  database.close();
+
+  const reopened = await SqliteStore.open(dbPath);
+  reopened.putTranscript({
+    id: "track",
+    sourceRef,
+    sourceRevision: "r1",
+    language: "en",
+    kind: "manual",
+    providerTrackId: null,
+    acquiredAt: new Date(0).toISOString(),
+    metadata: {},
+  }, [{
+    trackId: "track",
+    startMs: 0,
+    endMs: 2000,
+    text: "New caption",
+    ordinal: 0,
+  }]);
+  assert.equal(reopened.listTranscriptSegments("track")[0]?.text, "New caption");
+  reopened.close();
+
+  const legacy = new DatabaseSync(dbPath);
+  assert.deepEqual(
+    legacy.prepare("SELECT text FROM transcript_fts").all().map((row) => row.text),
+    ["legacy sentinel"],
+  );
+  legacy.close();
 });
 
 test("store rejects obsolete pre-launch schemas instead of migrating them", async (t) => {

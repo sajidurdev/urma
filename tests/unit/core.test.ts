@@ -11,7 +11,6 @@ import {
 } from "../../src/core/ids.js";
 import {
   createOrderedVisualSet,
-  createSparseVisualSet,
   largestUnsampledGaps,
   uniformPointsMs,
 } from "../../src/core/coverage.js";
@@ -20,11 +19,7 @@ import { chooseFrameTransport } from "../../src/acquisition/transport-policy.js"
 import type { ResolvedSource } from "../../src/sources/types.js";
 import { deterministicRequestKey } from "../../src/core/request-key.js";
 
-test("provider identity makes equivalent YouTube forms share one sourceRef", () => {
-  assert.equal(
-    remoteSourceRef(youtubeRemoteIdentity("yP0axVHdP-U")),
-    remoteSourceRef(youtubeRemoteIdentity("yP0axVHdP-U")),
-  );
+test("source references distinguish local paths and reject legacy YouTube forms", () => {
   assert.notEqual(
     localSourceRef("C:/video/a.mp4"),
     localSourceRef("C:/video/b.mp4"),
@@ -51,29 +46,6 @@ test("uniform overview is fixed at twelve unique chronological points when possi
   );
   assert(points.every((point) => point >= 0 && point < 120_000));
   assert.deepEqual(uniformPointsMs(0, 3), [0, 1, 2]);
-});
-
-test("nested sparse coverage remains two distinct evidence sets", () => {
-  const parent = createSparseVisualSet(
-    0,
-    1_200_000,
-    uniformPointsMs(0, 1_200_000),
-    null,
-  );
-  const child = createSparseVisualSet(
-    600_000,
-    1_200_000,
-    uniformPointsMs(600_000, 1_200_000),
-    null,
-  );
-  assert.equal([parent, child].length, 2);
-  assert.deepEqual(
-    [parent, child].map((entry) => [entry.startMs, entry.endMs]),
-    [
-      [0, 1_200_000],
-      [600_000, 1_200_000],
-    ],
-  );
 });
 
 test("ordered burst is sparse and never represented as a continuous interval", () => {

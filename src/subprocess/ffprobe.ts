@@ -2,7 +2,7 @@ import type { UrmaConfig } from "../config.js";
 import { UrmaError } from "../core/errors.js";
 import type { RemoteOperationContext } from "../remote/worker.js";
 import { runChecked, type ProcessResult, type RunOptions } from "./runner.js";
-import { remoteMediaInputArgs } from "./remote-media.js";
+import { subprocessMediaInput } from "./remote-media.js";
 import { verifyRuntimeTool } from "../distribution/integrity.js";
 
 export class Ffprobe {
@@ -33,24 +33,25 @@ export class Ffprobe {
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
     await verifyRuntimeTool(this.config, "ffprobe");
-    const remoteArgs = await remoteMediaInputArgs(media, this.remoteContext);
+    const mediaInput = await subprocessMediaInput(media, this.remoteContext);
     const result = await this.runner(
       this.config.ffprobe,
       [
-        ...remoteArgs,
+        ...mediaInput.args,
         "-v",
         "error",
         "-show_format",
         "-show_streams",
         "-of",
         "json",
-        media,
+        mediaInput.input,
       ],
       {
         timeoutMs: this.config.limits.metadataTimeoutMs,
         maxStdoutBytes: this.config.limits.subprocessStdoutBytes,
         maxStderrBytes: this.config.limits.subprocessStderrBytes,
         signal,
+        inputFile: mediaInput.inputFile,
         debug: this.config.debug,
         label: "ffprobe",
         diagnosticRole: "ffprobe-media-probe",

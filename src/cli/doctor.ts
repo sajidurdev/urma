@@ -177,53 +177,25 @@ async function directoryAccess(
   }
 }
 
-function sqliteChecks(): [DoctorCheck, DoctorCheck] {
+function sqliteCheck(): DoctorCheck {
   let database: DatabaseSync | undefined;
-  let sqliteVersion: string | null = null;
-  let sqliteError: unknown;
-  let ftsAvailable = false;
-  let ftsError: unknown;
   try {
     database = new DatabaseSync(":memory:");
-    try {
-      const row = database
-        .prepare("SELECT sqlite_version() AS version")
-        .get() as { version?: unknown };
-      if (typeof row.version !== "string" || row.version.length === 0) {
-        throw new Error("SQLite returned no version");
-      }
-      sqliteVersion = row.version;
-    } catch (error) {
-      sqliteError = error;
+    const row = database
+      .prepare("SELECT sqlite_version() AS version")
+      .get() as { version?: unknown };
+    if (typeof row.version !== "string" || row.version.length === 0) {
+      throw new Error("SQLite returned no version");
     }
-    try {
-      database.exec("CREATE VIRTUAL TABLE doctor_fts USING fts5(body)");
-      ftsAvailable = true;
-    } catch (error) {
-      ftsError = error;
-    }
+    return success("SQLite", `SQLite ${row.version}`);
   } catch (error) {
-    sqliteError = error;
-    ftsError = error;
+    return failure("SQLite", errorMessage(error));
   } finally {
     try {
       database?.close();
     } catch {
     }
   }
-  const sqlite = sqliteVersion === null
-    ? failure(
-      "SQLite",
-      errorMessage(sqliteError ?? new Error("SQLite is unavailable")),
-    )
-    : success("SQLite", `SQLite ${sqliteVersion}`);
-  const fts = ftsAvailable ? success("FTS5", "available") : failure(
-    "FTS5",
-    `unavailable: ${
-      errorMessage(ftsError ?? new Error("SQLite could not be opened"))
-    }`,
-  );
-  return [sqlite, fts];
 }
 
 function displayVersion(name: string, value: string): string {
@@ -445,7 +417,7 @@ export async function runDoctor(config: UrmaConfig): Promise<DoctorReport> {
         "unsupported",
       ),
   ];
-  checks.push(...sqliteChecks());
+  checks.push(sqliteCheck());
 
   const [ffmpeg, ffprobe, ytdlp] = await Promise.all([
     versionCheck(
