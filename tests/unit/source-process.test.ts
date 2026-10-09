@@ -95,7 +95,6 @@ test("local roots reject outside files and symlink escapes while revision follow
   await writeFile(escaped, "secret");
   const config = { localRoots: [root], allowUnc: false };
   const first = await resolveLocalPath(inside, config);
-  await new Promise((resolve) => setTimeout(resolve, 10));
   await writeFile(inside, "two-two");
   const second = await resolveLocalPath(inside, config);
   assert.notEqual(first.revision, second.revision);
@@ -159,7 +158,6 @@ test("local sidecar changes revision and sidecar symlink escapes are rejected", 
     localRoots: [root],
     allowUnc: false,
   });
-  await new Promise((resolve) => setTimeout(resolve, 10));
   await writeFile(sidecar, "two-two");
   const second = await resolveLocalBundle(video, {
     localRoots: [root],
