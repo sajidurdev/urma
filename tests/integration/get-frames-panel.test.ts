@@ -351,7 +351,7 @@ test("get_frames panel is bounded, ordered, canonical-resource mapped, and cache
     canonical.every(
       (artifact) =>
         artifact.role === "evidence" &&
-        artifact.producer.version === "frame-extractor",
+        artifact.producer.version === "frame-extractor-v2",
     ),
   );
   const derived = artifacts.find(

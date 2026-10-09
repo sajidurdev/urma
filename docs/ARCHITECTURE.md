@@ -184,6 +184,11 @@ acquirer and content-addressed artifact identity. Remote HLS acquisition uses
 bounded sections around the requested target and validates the resulting video
 stream timing before committing the section.
 
+Decoder seeks use the container's start time, recorded separately from the
+video stream's PTS coverage. A complete source copy can return its first video
+frame when the requested timestamp precedes that frame. Bounded sections
+still require validated video coverage of the requested timestamp.
+
 An exact-frame panel is produced after the canonical frames exist. It uses up
 to 12 request-ordered frames in a deterministic row-major layout. The panel is
 a non-canonical locator artifact; each cell maps to its canonical frame by

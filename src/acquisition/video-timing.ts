@@ -1,12 +1,16 @@
 type Rational = Readonly<{ numerator: bigint; denominator: bigint }>;
 
-const VIDEO_TIMING_CONTRACT_VERSION = 2;
+const VIDEO_TIMING_CONTRACT_VERSION = 3;
+const MAX_NUMERIC_TEXT_LENGTH = 128;
 
 export type VideoPtsCoverage = Readonly<{
   start: Rational;
   end: Rational;
+  containerStart: Rational;
   startSeconds: number;
   endSeconds: number;
+  containerStartSeconds: number;
+  containerStartTime: string;
   startPts: string | null;
   endPts: string | null;
   durationTs: string | null;
@@ -58,9 +62,14 @@ function parseInteger(value: unknown): bigint | null {
   if (typeof value === "number") {
     return Number.isSafeInteger(value) ? BigInt(value) : null;
   }
-  if (typeof value !== "string" || !/^-?\d+$/u.test(value.trim())) return null;
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (
+    text.length > MAX_NUMERIC_TEXT_LENGTH ||
+    !/^-?\d+$/u.test(text)
+  ) return null;
   try {
-    return BigInt(value.trim());
+    return BigInt(text);
   } catch {
     return null;
   }
@@ -72,8 +81,10 @@ function parseDecimal(value: unknown): Rational | null {
     value = value.toString();
   }
   if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (text.length > MAX_NUMERIC_TEXT_LENGTH) return null;
   const match = /^([+-]?)(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/u.exec(
-    value.trim(),
+    text,
   );
   if (!match) return null;
   const fraction = match[3] ?? "";
@@ -92,7 +103,9 @@ function parseTimeBase(
   value: unknown,
 ): { rational: Rational; text: string } | null {
   if (typeof value !== "string") return null;
-  const match = /^(-?\d+)\/(\d+)$/u.exec(value.trim());
+  const text = value.trim();
+  if (text.length > MAX_NUMERIC_TEXT_LENGTH) return null;
+  const match = /^(-?\d+)\/(\d+)$/u.exec(text);
   if (!match) return null;
   const numerator = parseInteger(match[1]);
   const denominator = parseInteger(match[2]);
@@ -118,6 +131,8 @@ function integerText(value: bigint | null): string | null {
 function buildCoverage(
   start: Rational,
   end: Rational,
+  containerStart: Rational,
+  containerStartTime: string,
   values: {
     startPts: bigint | null;
     endPts: bigint | null;
@@ -128,14 +143,22 @@ function buildCoverage(
   if (compare(end, start) <= 0) return null;
   const startSeconds = secondsValue(start);
   const endSeconds = secondsValue(end);
-  if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds)) {
+  const containerStartSeconds = secondsValue(containerStart);
+  if (
+    !Number.isFinite(startSeconds) ||
+    !Number.isFinite(endSeconds) ||
+    !Number.isFinite(containerStartSeconds)
+  ) {
     return null;
   }
   return {
     start,
     end,
+    containerStart,
     startSeconds,
     endSeconds,
+    containerStartSeconds,
+    containerStartTime,
     startPts: integerText(values.startPts),
     endPts: integerText(values.endPts),
     durationTs: integerText(values.durationTs),
@@ -146,7 +169,12 @@ function buildCoverage(
 /** Parse retained presentation-time coverage from the selected video stream */
 export function parseVideoStreamCoverage(
   stream: Readonly<Record<string, unknown>>,
+  containerStartTime: unknown,
 ): VideoPtsCoverage | null {
+  if (typeof containerStartTime !== "string") return null;
+  const normalizedContainerStartTime = containerStartTime.trim();
+  const containerStart = parseDecimal(normalizedContainerStartTime);
+  if (containerStart === null) return null;
   const timeBase = parseTimeBase(stream.time_base);
   const startPts = parseInteger(stream.start_pts);
   const durationTs = parseInteger(stream.duration_ts);
@@ -166,12 +194,18 @@ export function parseVideoStreamCoverage(
     );
     if (start !== null && duration !== null) {
       const end = add(start, duration);
-      return buildCoverage(start, end, {
-        startPts,
-        endPts: startPts + durationTs,
-        durationTs,
-        timeBase: timeBase.text,
-      });
+      return buildCoverage(
+        start,
+        end,
+        containerStart,
+        normalizedContainerStartTime,
+        {
+          startPts,
+          endPts: startPts + durationTs,
+          durationTs,
+          timeBase: timeBase.text,
+        },
+      );
     }
   }
 
@@ -199,12 +233,18 @@ export function parseVideoStreamCoverage(
   ) {
     return null;
   }
-  return buildCoverage(start, add(start, duration), {
-    startPts: null,
-    endPts: null,
-    durationTs: null,
-    timeBase: timeBase?.text ?? null,
-  });
+  return buildCoverage(
+    start,
+    add(start, duration),
+    containerStart,
+    normalizedContainerStartTime,
+    {
+      startPts: null,
+      endPts: null,
+      durationTs: null,
+      timeBase: timeBase?.text ?? null,
+    },
+  );
 }
 
 /** Parse retained PTS-aware producer fields for exact media paths */
@@ -223,6 +263,11 @@ export function parseStoredVideoCoverage(
   const endPts = parseInteger(producer.validatedVideoEndPts);
   const durationTs = parseInteger(producer.validatedVideoDurationTs);
   const timeBase = parseTimeBase(producer.validatedVideoTimeBase);
+  const containerStartTime = typeof producer.validatedContainerStartTime === "string"
+    ? producer.validatedContainerStartTime
+    : null;
+  const containerStart = parseDecimal(containerStartTime);
+  if (containerStart === null || containerStartTime === null) return null;
   const derivedEndPts = endPts ??
     (startPts !== null && durationTs !== null && durationTs > 0n
       ? startPts + durationTs
@@ -242,14 +287,20 @@ export function parseStoredVideoCoverage(
       timeBase.rational.denominator,
     );
     if (start !== null && end !== null) {
-      return buildCoverage(start, end, {
-        startPts,
-        endPts: derivedEndPts,
-        durationTs: durationTs !== null && durationTs > 0n
-          ? durationTs
-          : derivedEndPts - startPts,
-        timeBase: timeBase.text,
-      });
+      return buildCoverage(
+        start,
+        end,
+        containerStart,
+        containerStartTime,
+        {
+          startPts,
+          endPts: derivedEndPts,
+          durationTs: durationTs !== null && durationTs > 0n
+            ? durationTs
+            : derivedEndPts - startPts,
+          timeBase: timeBase.text,
+        },
+      );
     }
   }
 
@@ -262,12 +313,18 @@ export function parseStoredVideoCoverage(
   const end = parseDecimal(producer.validatedVideoEndTime) ??
     parseDecimal(producer.validatedVideoEnd);
   if (start === null || end === null) return null;
-  return buildCoverage(start, end, {
-    startPts: null,
-    endPts: null,
-    durationTs: null,
-    timeBase: null,
-  });
+  return buildCoverage(
+    start,
+    end,
+    containerStart,
+    containerStartTime,
+    {
+      startPts: null,
+      endPts: null,
+      durationTs: null,
+      timeBase: null,
+    },
+  );
 }
 
 /** Parse the bounded-section PTS-aware producer contract */
@@ -285,6 +342,7 @@ export function serializeVideoPtsCoverage(
     validatedVideoTimingVersion: VIDEO_TIMING_CONTRACT_VERSION,
     validatedVideoStart: coverage.startSeconds,
     validatedVideoEnd: coverage.endSeconds,
+    validatedContainerStartTime: coverage.containerStartTime,
     validatedVideoStartTime: coverage.startSeconds.toFixed(9),
     validatedVideoEndTime: coverage.endSeconds.toFixed(9),
     validatedVideoStartPts: coverage.startPts,
@@ -294,32 +352,46 @@ export function serializeVideoPtsCoverage(
   };
 }
 
+/** Check a target against PTS coverage; early-frame allowance requires a source-prefix proof. */
 export function isTimestampCovered(
   coverage: VideoPtsCoverage,
   nominalLocalMs: number,
+  allowFirstFrameBeforeVideoStart = false,
 ): boolean {
   if (!Number.isSafeInteger(nominalLocalMs) || nominalLocalMs < 0) return false;
   const target = rational(BigInt(nominalLocalMs), 1_000n)!;
   // Include the first retained presentation timestamp and exclude the end
   return (
-    compare(target, coverage.start) >= 0 && compare(target, coverage.end) < 0
+    (compare(target, coverage.start) >= 0 || allowFirstFrameBeforeVideoStart) &&
+    compare(target, coverage.end) < 0
   );
 }
 
+/** Map a source-local target to FFmpeg's input-relative seek position. */
 export function physicalSeekMs(
   coverage: VideoPtsCoverage,
   nominalLocalMs: number,
+  allowFirstFrameBeforeVideoStart = false,
 ): number {
   const target = rational(BigInt(nominalLocalMs), 1_000n)!;
   const delta = rational(
-    target.numerator * coverage.start.denominator -
-      coverage.start.numerator * target.denominator,
-    target.denominator * coverage.start.denominator,
+    target.numerator * coverage.containerStart.denominator -
+      coverage.containerStart.numerator * target.denominator,
+    target.denominator * coverage.containerStart.denominator,
   )!;
   const milliseconds = secondsValue(delta) * 1_000;
-  if (!Number.isFinite(milliseconds) || milliseconds < 0) {
+  if (!Number.isFinite(milliseconds)) {
     throw new RangeError(
-      "PTS-aware bounded seek was not a finite non-negative value",
+      "Container-origin-aware seek was not finite",
+    );
+  }
+  if (milliseconds < 0) {
+    if (
+      allowFirstFrameBeforeVideoStart &&
+      compare(target, coverage.start) < 0
+    ) return 0;
+    throw new RangeError(
+      "Container-origin-aware seek precedes the media input without selecting its first video frame",
     );
   }
   return milliseconds;

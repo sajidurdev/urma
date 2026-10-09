@@ -13,6 +13,7 @@ import {
   remoteSourceRef,
   youtubeRemoteIdentity,
 } from "../../src/core/ids.js";
+import { deterministicRequestKey } from "../../src/core/request-key.js";
 import { UrmaError } from "../../src/core/errors.js";
 import type { ResolvedSource } from "../../src/sources/types.js";
 import {
@@ -26,6 +27,7 @@ import {
 import { Ffmpeg } from "../../src/subprocess/ffmpeg.js";
 import { Ffprobe } from "../../src/subprocess/ffprobe.js";
 import { type ProcessResult, runChecked } from "../../src/subprocess/runner.js";
+import { candidateKeyForSourceFormat } from "../../src/sources/candidates.js";
 import { BlobStore } from "../../src/store/blob-store.js";
 import type { StoredArtifact } from "../../src/store/store.js";
 import { SqliteStore } from "../../src/store/sqlite-store.js";
@@ -268,6 +270,7 @@ async function makeOffsetSection(
   ctx: Awaited<ReturnType<typeof fixture>>,
   input: string,
   offsetSeconds: number,
+  preciseTimescale = false,
 ): Promise<string> {
   const output = path.join(ctx.directory, `offset-${offsetSeconds}.mp4`);
   await runChecked(
@@ -276,13 +279,80 @@ async function makeOffsetSection(
       "-v",
       "error",
       "-itsoffset",
-      offsetSeconds.toFixed(3),
+      offsetSeconds.toFixed(9),
       "-i",
       input,
       "-c",
       "copy",
       "-avoid_negative_ts",
       "disabled",
+      ...(preciseTimescale
+        ? ["-movie_timescale", "1000000", "-video_track_timescale", "1000000"]
+        : []),
+      "-y",
+      output,
+    ],
+    { timeoutMs: 30_000 },
+  );
+  return output;
+}
+
+async function makeAudioVideoWithDelayedVideo(
+  ctx: Awaited<ReturnType<typeof fixture>>,
+): Promise<string> {
+  const zeroOriginVideo = path.join(ctx.directory, "zero-origin-video.mp4");
+  const output = path.join(ctx.directory, "audio-zero-video-55ms.mp4");
+  await runChecked(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc=size=160x90:rate=10:duration=2",
+      "-c:v",
+      "libx264",
+      "-g",
+      "1",
+      "-bf",
+      "0",
+      "-pix_fmt",
+      "yuv420p",
+      "-video_track_timescale",
+      "90000",
+      "-y",
+      zeroOriginVideo,
+    ],
+    { timeoutMs: 30_000 },
+  );
+  await runChecked(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-itsoffset",
+      "0.055",
+      "-i",
+      zeroOriginVideo,
+      "-f",
+      "lavfi",
+      "-i",
+      "anullsrc=channel_layout=stereo:sample_rate=48000",
+      "-map",
+      "0:v:0",
+      "-map",
+      "1:a:0",
+      "-t",
+      "2.055",
+      "-c:v",
+      "copy",
+      "-c:a",
+      "aac",
+      "-avoid_negative_ts",
+      "disabled",
+      "-video_track_timescale",
+      "90000",
       "-y",
       output,
     ],
@@ -412,6 +482,7 @@ async function storedTransport(
     endMs: number;
     version: "bounded-section";
     producer?: Readonly<Record<string, unknown>>;
+    createdAt?: string;
   },
 ): Promise<StoredArtifact> {
   const blob = await ctx.blobs.putFile(file);
@@ -435,12 +506,67 @@ async function storedTransport(
     },
     producer: {
       version: values.version,
-      validatedVideoTimingVersion: 2,
+      validatedVideoTimingVersion: 3,
+      validatedContainerStartTime: "0.000000",
       ...(values.producer ?? {}),
     },
-    createdAt: new Date().toISOString(),
+    createdAt: values.createdAt ?? new Date().toISOString(),
   };
   ctx.store.putArtifact(artifact);
+  return artifact;
+}
+
+async function seedLegacyReusableEvidence(
+  ctx: Awaited<ReturnType<typeof fixture>>,
+  source: ResolvedSource,
+  file: string,
+): Promise<StoredArtifact> {
+  const blob = await ctx.blobs.putFile(file);
+  const probe = await new Ffprobe(ctx.config).inspect(file);
+  const streams = Array.isArray(probe.streams)
+    ? (probe.streams as Array<Record<string, unknown>>)
+    : [];
+  const video = streams.find((stream) => stream.codec_type === "video");
+  const format = probe.format as Record<string, unknown>;
+  assert(video);
+  const coverage = parseVideoStreamCoverage(video, format.start_time);
+  assert(coverage);
+  const legacyTiming = { ...serializeVideoPtsCoverage(coverage) };
+  delete legacyTiming.validatedContainerStartTime;
+  legacyTiming.validatedVideoTimingVersion = 2;
+  const formatSummary = source.formats[0]!;
+  const params = {
+    candidateKey: candidateKeyForSourceFormat(source, formatSummary),
+    formatId: formatSummary.id,
+    fidelity: "evidence",
+  };
+  const createdAt = new Date().toISOString();
+  const artifact: StoredArtifact = {
+    artifactId: blob.artifactId,
+    sourceRef: source.sourceRef,
+    sourceRevision: source.revision,
+    kind: "evidence_media",
+    role: "transport",
+    mimeType: "video/mp4",
+    sha256: blob.sha256,
+    byteSize: blob.byteSize,
+    blobPath: blob.relativePath,
+    startMs: 0,
+    endMs: source.durationMs,
+    params,
+    producer: {
+      version: "evidence-copy",
+      ...legacyTiming,
+    },
+    createdAt,
+  };
+  const requestKey = deterministicRequestKey(
+    source.revision,
+    "evidence-copy",
+    { startMs: 0, endMs: source.durationMs, ...params },
+    "evidence-copy",
+  );
+  ctx.store.putArtifact(artifact, { requestKey, operation: "evidence-copy" });
   return artifact;
 }
 
@@ -457,7 +583,8 @@ async function pinnedLocalVideo(
     : [];
   const video = streams.find((stream) => stream.codec_type === "video");
   assert(video);
-  const coverage = parseVideoStreamCoverage(video);
+  const format = probe.format as Record<string, unknown>;
+  const coverage = parseVideoStreamCoverage(video, format.start_time);
   assert(coverage);
   return {
     ...ctx.resolved,
@@ -503,7 +630,8 @@ test("exact-frame extraction uses the first decodable presentation frame at or a
 test("bounded PTS coverage includes its start, excludes its end, and preserves the physical offset", () => {
   const coverage = parseStoredBoundedVideoCoverage({
     version: "bounded-section",
-    validatedVideoTimingVersion: 2,
+    validatedVideoTimingVersion: 3,
+    validatedContainerStartTime: "0.055000",
     validatedVideoStartPts: "4950",
     validatedVideoEndPts: "184950",
     validatedVideoDurationTs: "180000",
@@ -587,6 +715,246 @@ test("fresh reusable evidence maps nonzero PTS to the canonical exact frame", as
   assert(parseStoredVideoCoverage(reusable.producer));
 });
 
+test("complete A/V evidence with zero container origin accepts target zero before its first video PTS", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx);
+  const probe = await new Ffprobe(ctx.config).inspect(delayed);
+  const streams = probe.streams as Array<Record<string, unknown>>;
+  const video = streams.find((stream) => stream.codec_type === "video");
+  const audio = streams.find((stream) => stream.codec_type === "audio");
+  const format = probe.format as Record<string, unknown>;
+  assert(video);
+  assert(audio);
+  assert.equal(format.start_time, "0.000000");
+  assert.equal(audio.start_time, "0.000000");
+  assert.equal(video.start_time, "0.055000");
+
+  const progressive = {
+    ...ctx.resolved,
+    formats: ctx.resolved.formats.map((item) => ({
+      ...item,
+      protocol: "https",
+    })),
+    capabilities: { ...ctx.resolved.capabilities, targetedMedia: false },
+  };
+  const transport = copyingDownloader(ctx, delayed, delayed);
+  const outcomes = await new FrameAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, transport.downloader),
+  ).getOutcomes(progressive, ctx.ref, [0]);
+  const outcome = outcomes[0]!;
+  assert.equal(outcome.status, "success");
+  if (outcome.status !== "success") {
+    throw new Error("complete A/V evidence should satisfy target zero");
+  }
+
+  const expectedPath = path.join(ctx.directory, "complete-av-zero.jpg");
+  await new Ffmpeg(ctx.config).extractJpeg(delayed, 0, expectedPath);
+  assert.deepEqual(
+    await ctx.blobs.read(
+      outcome.artifact.artifactId,
+      outcome.artifact.blobPath,
+      8 * 1024 * 1024,
+    ),
+    await readFile(expectedPath),
+  );
+});
+
+test("complete A/V evidence maps interior timestamps from the container origin", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx);
+  const probe = await new Ffprobe(ctx.config).inspect(delayed);
+  const streams = probe.streams as Array<Record<string, unknown>>;
+  assert.equal((probe.format as Record<string, unknown>).start_time, "0.000000");
+  assert.equal(
+    streams.find((stream) => stream.codec_type === "audio")?.start_time,
+    "0.000000",
+  );
+  assert.equal(
+    streams.find((stream) => stream.codec_type === "video")?.start_time,
+    "0.055000",
+  );
+
+  const progressive = {
+    ...ctx.resolved,
+    formats: ctx.resolved.formats.map((item) => ({
+      ...item,
+      protocol: "https",
+    })),
+    capabilities: { ...ctx.resolved.capabilities, targetedMedia: false },
+  };
+  const transport = copyingDownloader(ctx, delayed, delayed);
+  const observed = await new FrameAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, transport.downloader),
+  ).get(progressive, ctx.ref, [1_000]);
+  const expectedPath = path.join(ctx.directory, "complete-av-1000.jpg");
+  await new Ffmpeg(ctx.config).extractJpeg(delayed, 1_000, expectedPath);
+  assert.deepEqual(
+    await ctx.blobs.read(
+      observed[0]!.artifact.artifactId,
+      observed[0]!.artifact.blobPath,
+      8 * 1024 * 1024,
+    ),
+    await readFile(expectedPath),
+  );
+});
+
+test("complete video-only evidence keeps its 55ms first frame eligible at zero", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeOffsetSection(ctx, ctx.full, 0.055);
+  const probe = await new Ffprobe(ctx.config).inspect(delayed);
+  assert.equal((probe.format as Record<string, unknown>).start_time, "0.055000");
+
+  const progressive = {
+    ...ctx.resolved,
+    formats: ctx.resolved.formats.map((item) => ({
+      ...item,
+      protocol: "https",
+    })),
+    capabilities: { ...ctx.resolved.capabilities, targetedMedia: false },
+  };
+  const transport = copyingDownloader(ctx, delayed, delayed);
+  const observed = await new FrameAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, transport.downloader),
+  ).get(progressive, ctx.ref, [0]);
+  const expectedPath = path.join(ctx.directory, "complete-video-only-zero.jpg");
+  await new Ffmpeg(ctx.config).extractJpeg(delayed, 0, expectedPath);
+  assert.deepEqual(
+    await ctx.blobs.read(
+      observed[0]!.artifact.artifactId,
+      observed[0]!.artifact.blobPath,
+      8 * 1024 * 1024,
+    ),
+    await readFile(expectedPath),
+  );
+});
+
+test("sub-millisecond container-relative seek preserves the next-frame boundary", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeOffsetSection(ctx, ctx.full, 0.0009, true);
+  const probe = await new Ffprobe(ctx.config).inspect(delayed);
+  const containerStartTime = Number(
+    (probe.format as Record<string, unknown>).start_time,
+  );
+  assert(Math.abs(containerStartTime - 0.0009) < 0.00005);
+
+  const progressive = {
+    ...ctx.resolved,
+    formats: ctx.resolved.formats.map((item) => ({
+      ...item,
+      protocol: "https",
+    })),
+    capabilities: { ...ctx.resolved.capabilities, targetedMedia: false },
+  };
+  const transport = copyingDownloader(ctx, delayed, delayed);
+  const observed = await new FrameAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, transport.downloader),
+  ).get(progressive, ctx.ref, [1]);
+
+  const expectedPath = path.join(ctx.directory, "sub-ms-expected.jpg");
+  const oldRoundedPath = path.join(ctx.directory, "sub-ms-rounded-to-zero.jpg");
+  await new Ffmpeg(ctx.config).extractJpeg(delayed, 1, expectedPath);
+  await runChecked(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-ss",
+      "0.000",
+      "-i",
+      delayed,
+      "-frames:v",
+      "1",
+      "-pix_fmt",
+      "yuvj420p",
+      "-q:v",
+      "2",
+      "-y",
+      oldRoundedPath,
+    ],
+    { timeoutMs: 30_000 },
+  );
+  const expected = await readFile(expectedPath);
+  assert.notDeepEqual(await readFile(oldRoundedPath), expected);
+  assert.deepEqual(
+    await ctx.blobs.read(
+      observed[0]!.artifact.artifactId,
+      observed[0]!.artifact.blobPath,
+      8 * 1024 * 1024,
+    ),
+    expected,
+  );
+});
+
+test("legacy v2 reusable evidence is replaced once before exact frames reuse it", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx);
+  const progressive = {
+    ...ctx.resolved,
+    formats: ctx.resolved.formats.map((item) => ({
+      ...item,
+      protocol: "https",
+    })),
+    capabilities: { ...ctx.resolved.capabilities, targetedMedia: false },
+  };
+  const legacy = await seedLegacyReusableEvidence(ctx, progressive, delayed);
+  assert.equal(legacy.producer.validatedVideoTimingVersion, 2);
+
+  const transport = copyingDownloader(ctx, delayed, delayed);
+  const media = new MediaAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    transport.downloader,
+  );
+  const frames = new FrameAcquirer(ctx.config, ctx.store, ctx.blobs, media);
+  const first = await frames.get(progressive, ctx.ref, [0]);
+  const expectedZero = path.join(ctx.directory, "legacy-v2-zero.jpg");
+  await new Ffmpeg(ctx.config).extractJpeg(delayed, 0, expectedZero);
+  assert.deepEqual(
+    await ctx.blobs.read(
+      first[0]!.artifact.artifactId,
+      first[0]!.artifact.blobPath,
+      8 * 1024 * 1024,
+    ),
+    await readFile(expectedZero),
+  );
+  assert.equal(transport.calls.length, 1);
+  assert(
+    ctx.store
+      .listArtifacts(progressive.sourceRef, progressive.revision)
+      .some((artifact) =>
+        artifact.kind === "evidence_media" &&
+        artifact.producer.validatedVideoTimingVersion === 3 &&
+        artifact.producer.validatedSourcePrefix === "complete"
+      ),
+  );
+
+  const second = await frames.get(progressive, ctx.ref, [1_000]);
+  const expected = path.join(ctx.directory, "legacy-v2-one-second.jpg");
+  await new Ffmpeg(ctx.config).extractJpeg(delayed, 1_000, expected);
+  assert.deepEqual(
+    await ctx.blobs.read(
+      second[0]!.artifact.artifactId,
+      second[0]!.artifact.blobPath,
+      8 * 1024 * 1024,
+    ),
+    await readFile(expected),
+  );
+  assert.equal(transport.calls.length, 1);
+});
+
 test("cached reusable evidence maps nonzero PTS and rejects uncovered boundaries", async (t) => {
   const ctx = await fixture(t);
   const shifted = await makeOffsetSection(ctx, ctx.full, 2);
@@ -636,8 +1004,10 @@ test("cached reusable evidence maps nonzero PTS and rejects uncovered boundaries
     ctx.blobs,
     media,
   ).getOutcomes(nonTargetable, ctx.ref, [0, 10_000]);
-  assert.deepEqual(boundary.map((outcome) => outcome.status), ["error", "error"]);
+  assert.deepEqual(boundary.map((outcome) => outcome.status), ["success", "error"]);
   for (const outcome of boundary) {
+    if (outcome.atMs !== 10_000) continue;
+    assert.equal(outcome.status, "error");
     if (outcome.status !== "error") continue;
     assert(outcome.error instanceof UrmaError);
     assert.equal(outcome.error.code, "TARGETED_MEDIA_UNAVAILABLE");
@@ -656,7 +1026,7 @@ test("unknown PTS origin fails exact targets instead of becoming zero-origin", a
     start_time: "2.000000",
     duration: "4.000000",
   };
-  const knownCoverage = parseVideoStreamCoverage(knownOrigin);
+  const knownCoverage = parseVideoStreamCoverage(knownOrigin, "2.000000");
   assert(knownCoverage);
   assert.equal(knownCoverage.startSeconds, 2);
   const missingOrigin = {
@@ -664,7 +1034,7 @@ test("unknown PTS origin fails exact targets instead of becoming zero-origin", a
     start_pts: undefined,
     start_time: undefined,
   };
-  assert.equal(parseVideoStreamCoverage(missingOrigin), null);
+  assert.equal(parseVideoStreamCoverage(missingOrigin, "2.000000"), null);
   assert.match(shifted, /offset-2\.mp4$/u);
 
   const local = await pinnedLocalVideo(ctx, shifted, ctx.resolved.revision);
@@ -701,7 +1071,7 @@ test("unknown PTS origin fails exact targets instead of becoming zero-origin", a
     time_base: "1/90000",
     start_pts: "0",
     duration_ts: "360000",
-  });
+  }, "0.000000");
   assert(trueZero);
   assert.equal(trueZero.startSeconds, 0);
 });
@@ -723,6 +1093,36 @@ test("unmarked stored timing is not reusable exact evidence", () => {
     }),
     null,
   );
+});
+
+test("stored timing needs a finite exact container origin and preserves negative origins", () => {
+  const valid = {
+    validatedVideoTimingVersion: 3,
+    validatedVideoStartPts: "0",
+    validatedVideoEndPts: "90000",
+    validatedVideoDurationTs: "90000",
+    validatedVideoTimeBase: "1/90000",
+    validatedVideoStartTime: "0.000000000",
+    validatedVideoEndTime: "1.000000000",
+    validatedContainerStartTime: "0.000000",
+  };
+  assert(parseStoredVideoCoverage(valid));
+  for (const invalid of [
+    { ...valid, validatedContainerStartTime: undefined },
+    { ...valid, validatedContainerStartTime: "not-a-time" },
+    { ...valid, validatedContainerStartTime: "9".repeat(400) },
+    { ...valid, validatedVideoTimingVersion: 2 },
+  ]) {
+    assert.equal(parseStoredVideoCoverage(invalid), null);
+  }
+
+  const negativeOrigin = parseStoredVideoCoverage({
+    ...valid,
+    validatedContainerStartTime: "-0.500000",
+  });
+  assert(negativeOrigin);
+  assert.equal(negativeOrigin.containerStartSeconds, -0.5);
+  assert.equal(physicalSeekMs(negativeOrigin, 0), 500);
 });
 
 test("exact-frame cache reuse is source-scoped when local revisions collide", async (t) => {
@@ -840,10 +1240,152 @@ test("local exact frames use pinned nonzero-PTS timing and fail closed without i
   }
 });
 
+test("legacy v2 local timing is reprobed from the pinned blob before selecting frames", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx);
+  const local = await pinnedLocalVideo(ctx, delayed, ctx.resolved.revision);
+  const timingV2 = {
+    ...(local.safeMetadata.videoTiming as Record<string, unknown>),
+  };
+  assert.equal(timingV2.validatedVideoTimingVersion, 3);
+  delete timingV2.validatedContainerStartTime;
+  timingV2.validatedVideoTimingVersion = 2;
+  const legacy = {
+    ...local,
+    safeMetadata: { ...local.safeMetadata, videoTiming: timingV2 },
+  };
+
+  const outcomes = await new FrameAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, {
+      run: async () => {
+        throw new Error("pinned local timing reprobe must not acquire remote media");
+      },
+    }),
+  ).getOutcomes(legacy, ctx.ref, [0, 1_000]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.status), ["success", "success"]);
+  for (const outcome of outcomes) {
+    if (outcome.status !== "success") {
+      throw new Error("explicit v2 timing should reprobe the pinned local blob");
+    }
+    const expectedPath = path.join(ctx.directory, `local-v2-${outcome.atMs}.jpg`);
+    await new Ffmpeg(ctx.config).extractJpeg(delayed, outcome.atMs, expectedPath);
+    assert.deepEqual(
+      await ctx.blobs.read(
+        outcome.artifact.artifactId,
+        outcome.artifact.blobPath,
+        8 * 1024 * 1024,
+      ),
+      await readFile(expectedPath),
+    );
+  }
+  assert.equal(
+    (legacy.safeMetadata.videoTiming as Record<string, unknown>)
+      .validatedVideoTimingVersion,
+    2,
+  );
+});
+
+test("local targets with container origin after video PTS fail per target", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx);
+  const local = await pinnedLocalVideo(ctx, delayed, ctx.resolved.revision);
+  const inconsistentTiming = {
+    ...(local.safeMetadata.videoTiming as Record<string, unknown>),
+    validatedContainerStartTime: "0.500000",
+  };
+  const inconsistent = {
+    ...local,
+    safeMetadata: { ...local.safeMetadata, videoTiming: inconsistentTiming },
+  };
+  const outcomes = await new FrameAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, {
+      run: async () => {
+        throw new Error("local origin mismatch must not acquire remote media");
+      },
+    }),
+  ).getOutcomes(inconsistent, ctx.ref, [100, 1_000]);
+
+  assert.deepEqual(outcomes.map((outcome) => outcome.status), ["error", "success"]);
+  const unavailable = outcomes[0]!;
+  assert.equal(unavailable.status, "error");
+  if (unavailable.status === "error") {
+    assert(unavailable.error instanceof UrmaError);
+    assert.equal(unavailable.error.code, "MEDIA_INVALID");
+    assert.equal(unavailable.error.detail.reason, "local-seek-origin-mismatch");
+  }
+});
+
+test("cached bounded media skips an inconsistent container origin for a valid candidate", async (t) => {
+  const ctx = await fixture(t);
+  const invalidMedia = await makeAudioVideoWithDelayedVideo(ctx);
+  const validMedia = await makeShortVideo(ctx, 2);
+  const readCoverage = async (file: string) => {
+    const probe = await new Ffprobe(ctx.config).inspect(file);
+    const streams = probe.streams as Array<Record<string, unknown>>;
+    const video = streams.find((stream) => stream.codec_type === "video");
+    const format = probe.format as Record<string, unknown>;
+    assert(video);
+    const coverage = parseVideoStreamCoverage(video, format.start_time);
+    assert(coverage);
+    return serializeVideoPtsCoverage(coverage);
+  };
+  const invalidTiming = {
+    ...(await readCoverage(invalidMedia)),
+    validatedContainerStartTime: "0.500000",
+  };
+  const validTiming = await readCoverage(validMedia);
+  const invalid = await storedTransport(ctx, invalidMedia, {
+    startMs: 0,
+    endMs: 2_000,
+    version: "bounded-section",
+    createdAt: new Date(1).toISOString(),
+    producer: invalidTiming,
+  });
+  const valid = await storedTransport(ctx, validMedia, {
+    startMs: 0,
+    endMs: 2_000,
+    version: "bounded-section",
+    createdAt: new Date(2).toISOString(),
+    producer: validTiming,
+  });
+  assert.notEqual(invalid.artifactId, valid.artifactId);
+
+  const outcome = (await new FrameAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, {
+      run: async () => {
+        throw new Error("a later cached candidate should satisfy the target");
+      },
+    }),
+  ).getOutcomes(ctx.resolved, ctx.ref, [100]))[0]!;
+  assert.equal(outcome.status, "success");
+  if (outcome.status === "success") {
+    assert.equal(outcome.artifact.producer.transportArtifactId, valid.artifactId);
+  }
+});
+
 test("Twitch-shaped source-start coverage miss is a target failure with no reusable escalation", async (t) => {
   const ctx = await fixture(t);
-  const short = await makeShortVideo(ctx, 2);
-  const bounded = await makeOffsetSection(ctx, short, 0.055);
+  const bounded = await makeAudioVideoWithDelayedVideo(ctx);
+  const probe = await new Ffprobe(ctx.config).inspect(bounded);
+  const streams = probe.streams as Array<Record<string, unknown>>;
+  assert.equal((probe.format as Record<string, unknown>).start_time, "0.000000");
+  assert.equal(
+    streams.find((stream) => stream.codec_type === "audio")?.start_time,
+    "0.000000",
+  );
+  assert.equal(
+    streams.find((stream) => stream.codec_type === "video")?.start_time,
+    "0.055000",
+  );
   const transport = copyingDownloader(ctx, bounded);
   const outcomes = await new FrameAcquirer(
     ctx.config,
@@ -867,6 +1409,7 @@ test("Twitch-shaped source-start coverage miss is a target failure with no reusa
     .find((artifact) => artifact.kind === "media_section");
   assert(section);
   assert(Math.abs(Number(section.producer.validatedVideoStart) * 1_000 - 55) <= 2);
+  assert.equal(section.producer.validatedSourcePrefix, undefined);
   const artifacts = ctx.store.listArtifacts(
     ctx.resolved.sourceRef,
     ctx.resolved.revision,
@@ -1133,6 +1676,7 @@ test("ffmpeg exit zero without a JPEG fails the bounded target without reusable 
       validatedVideoTimeBase: "1/90000",
       validatedVideoStartTime: "0.000000",
       validatedVideoEndTime: "20.000000",
+      validatedContainerStartTime: "0.000000",
     },
   });
   const transport = copyingDownloader(ctx, short);
