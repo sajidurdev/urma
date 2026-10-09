@@ -1131,6 +1131,7 @@ async function main() {
       "bootstrap did not install the expected urma-mcp package metadata from the packed tarball",
     );
     assert(typeof packageJson.version === "string" && packageJson.version.length > 0, "packed package has no version");
+    report.package.version = packageJson.version;
     await regularFile(path.join(packageRoot, "launcher-v1.mjs"), "packed launcher");
     await regularFile(path.join(packageRoot, "dist", "src", "cli", "main.js"), "packed CLI");
     assert(contained(tempRoot, packageRoot), "qualification accidentally selected a package outside the isolated npm bootstrap");
