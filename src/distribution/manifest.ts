@@ -48,7 +48,6 @@ export type TargetReleaseManifest = Readonly<{
 // Pin the latest verified build of a month; BtbN retains month-end builds for two years.
 const BTBN_RELEASE = "autobuild-2026-09-30-13-08";
 const BTBN_VERSION = "N-127032-g6ae491a26c";
-const BTBN_NOTICE = `https://github.com/BtbN/FFmpeg-Builds/releases/tag/${BTBN_RELEASE}`;
 const YTDLP_VERSION = "2026.08.19";
 const YTDLP_NOTICE = `https://github.com/yt-dlp/yt-dlp/blob/${YTDLP_VERSION}/LICENSE`;
 const YTDLP_THIRD_PARTY_NOTICE = `https://github.com/yt-dlp/yt-dlp/blob/${YTDLP_VERSION}/THIRD_PARTY_LICENSES.txt`;
@@ -59,13 +58,15 @@ function btbN(
   sha256: string,
   bytes: number,
   executableSuffix: string,
+  release = BTBN_RELEASE,
+  version = BTBN_VERSION,
 ): ArtifactSpec {
-  const url = `https://github.com/BtbN/FFmpeg-Builds/releases/download/${BTBN_RELEASE}/${file}`;
+  const url = `https://github.com/BtbN/FFmpeg-Builds/releases/download/${release}/${file}`;
   return {
     kind: "ffmpeg",
     provider: "BtbN FFmpeg-Builds",
-    upstreamVersion: BTBN_VERSION,
-    upstreamRelease: BTBN_RELEASE,
+    upstreamVersion: version,
+    upstreamRelease: release,
     url,
     archiveFormat: file.endsWith(".tar.xz") ? "tar.xz" : "zip",
     archiveBytes: bytes,
@@ -80,7 +81,7 @@ function btbN(
       redistributable: true,
       nonfree: false,
       buildConfiguration: "BtbN static LGPL build; nonfree components disabled by release profile",
-      noticeUrls: [BTBN_NOTICE],
+      noticeUrls: [`https://github.com/BtbN/FFmpeg-Builds/releases/tag/${release}`],
     },
   };
 }
@@ -218,12 +219,15 @@ const windowsX64 = btbN(
   176142306,
   ".exe",
 );
+// The September winarm64 build crashes at startup (-version) on the native ARM64 runner.
 const windowsArm64 = btbN(
   "windows-arm64",
-  "ffmpeg-N-127032-g6ae491a26c-winarm64-lgpl.zip",
-  "cec4353287a44b0b9de49000961e6161a3393e8bf56cc9b18717d8906735b121",
-  121433592,
+  "ffmpeg-N-126342-gf88b741dbf-winarm64-lgpl.zip",
+  "050be15329851af86bba7f06c08dc6bdeaf9819e2269d945a9f33d61ab0149ad",
+  98448796,
   ".exe",
+  "autobuild-2026-08-31-13-27",
+  "N-126342-gf88b741dbf",
 );
 
 export const RELEASE_MANIFESTS: Readonly<Record<TargetPlatform, TargetReleaseManifest>> = {
