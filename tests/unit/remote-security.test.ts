@@ -6,7 +6,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import test from "node:test";
-import { connect, createServer as createTcpServer, type Socket } from "node:net";
+import { connect, createServer as createTcpServer, Socket } from "node:net";
 import { once } from "node:events";
 import {
   assertRedirectTargetAllowed,
@@ -109,6 +109,19 @@ test("remote URL admission accepts only HTTP(S) public default-port targets", ()
   }
 });
 
+test("Safe Proxy close during startup rejects and does not publish a listener", async (t) => {
+  const proxy = new SafeProxy();
+  t.after(() => proxy.close());
+  const starting = proxy.start();
+  proxy.close();
+  await assert.rejects(
+    starting,
+    (error: unknown) =>
+      error instanceof Error && "code" in error && error.code === "CANCELLED",
+  );
+  assert.equal(proxy.proxyUrl, null);
+});
+
 test("remote address admission rejects private, reserved, metadata, and awkward mapped forms", () => {
   for (const url of [
     "http://127.0.0.1/video",
@@ -190,6 +203,111 @@ test("Safe Proxy forwards HTTP to the exact validated public address", async (t)
   assert.equal(proxy.logs.at(-1)?.address, "93.184.216.34");
 });
 
+test("Safe Proxy stops HTTP acquisition when the client disconnects during DNS", async (t) => {
+  let beginLookup!: () => void;
+  let releaseLookup!: () => void;
+  const lookupStarted = new Promise<void>((resolve) => {
+    beginLookup = resolve;
+  });
+  const lookupGate = new Promise<void>((resolve) => {
+    releaseLookup = resolve;
+  });
+  let backendRequests = 0;
+  let backendRequestArrived!: () => void;
+  const backendRequest = new Promise<void>((resolve) => {
+    backendRequestArrived = resolve;
+  });
+  const fixture = await listenHttp((_request, response) => {
+    backendRequests += 1;
+    backendRequestArrived();
+    response.end("unexpectedly fetched");
+  });
+  t.after(() => fixture.server.close());
+  const proxy = new SafeProxy({
+    lookup: async (hostname) => {
+      assert.equal(hostname, "cancel.example.test");
+      beginLookup();
+      await lookupGate;
+      return [{ address: "93.184.216.34", family: 4 }];
+    },
+    dial: () => connect({ host: "127.0.0.1", port: fixture.port, family: 4 }),
+  });
+  t.after(() => proxy.close());
+  t.after(() => releaseLookup());
+  const endpoint = new URL(await proxy.start());
+  const downstream = httpRequest({
+    host: endpoint.hostname,
+    port: Number(endpoint.port),
+    path: "http://cancel.example.test/video.mp4",
+    method: "GET",
+    headers: { host: "cancel.example.test" },
+  }, () => {});
+  downstream.on("error", () => {});
+  downstream.end();
+  await lookupStarted;
+  const closed = new Promise<void>((resolve) => {
+    downstream.once("close", resolve);
+  });
+  downstream.destroy();
+  await closed;
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseLookup();
+  await Promise.race([
+    backendRequest,
+    new Promise((resolve) => setTimeout(resolve, 100)),
+  ]);
+  assert.equal(backendRequests, 0);
+});
+
+test("Safe Proxy closes an active HTTP upstream when the client disconnects", async (t) => {
+  let timer: NodeJS.Timeout | undefined;
+  let resolvePrematureClose!: () => void;
+  let resolveFinished!: () => void;
+  const prematureClose = new Promise<void>((resolve) => {
+    resolvePrematureClose = resolve;
+  });
+  const finished = new Promise<void>((resolve) => {
+    resolveFinished = resolve;
+  });
+  const fixture = await listenHttp((_request, response) => {
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.write("first chunk");
+    response.once("close", () => {
+      if (!response.writableEnded) resolvePrematureClose();
+      if (timer) clearTimeout(timer);
+    });
+    response.once("finish", resolveFinished);
+    timer = setTimeout(() => response.end("last chunk"), 500);
+  });
+  t.after(() => {
+    if (timer) clearTimeout(timer);
+    fixture.server.closeAllConnections();
+    fixture.server.close();
+  });
+  const proxy = new SafeProxy({
+    lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    dial: () => connect({ host: "127.0.0.1", port: fixture.port, family: 4 }),
+  });
+  t.after(() => proxy.close());
+  const endpoint = new URL(await proxy.start());
+  const downstream = httpRequest({
+    host: endpoint.hostname,
+    port: Number(endpoint.port),
+    path: "http://public.example.test/stream.m3u8",
+    method: "GET",
+    headers: { host: "public.example.test" },
+  }, (response) => {
+    response.once("data", () => downstream.destroy());
+  });
+  downstream.on("error", () => {});
+  downstream.end();
+  const result = await Promise.race([
+    prematureClose.then(() => "closed" as const),
+    finished.then(() => "finished" as const),
+  ]);
+  assert.equal(result, "closed");
+});
+
 test("Safe Proxy supports HTTPS CONNECT without terminating TLS", async (t) => {
   const fixture = await listenTcp((socket) => {
     socket.on("data", (chunk) => socket.write(chunk));
@@ -234,6 +352,94 @@ test("Safe Proxy supports HTTPS CONNECT without terminating TLS", async (t) => {
   assert.equal(echoed.toString("utf8"), "tunnel-ok");
   assert.equal(proxy.logs.at(-1)?.kind, "connect");
   assert.equal(proxy.logs.at(-1)?.address, "93.184.216.34");
+});
+
+test("Safe Proxy stops CONNECT acquisition when the client disconnects during DNS", async (t) => {
+  let beginLookup!: () => void;
+  let releaseLookup!: () => void;
+  const lookupStarted = new Promise<void>((resolve) => {
+    beginLookup = resolve;
+  });
+  const lookupGate = new Promise<void>((resolve) => {
+    releaseLookup = resolve;
+  });
+  let upstreamConnections = 0;
+  let upstreamConnected!: () => void;
+  const connected = new Promise<void>((resolve) => {
+    upstreamConnected = resolve;
+  });
+  const fixture = await listenTcp((socket) => {
+    upstreamConnections += 1;
+    upstreamConnected();
+    socket.destroy();
+  });
+  t.after(() => fixture.server.close());
+  const proxy = new SafeProxy({
+    lookup: async (hostname) => {
+      assert.equal(hostname, "cancel.example.test");
+      beginLookup();
+      await lookupGate;
+      return [{ address: "93.184.216.34", family: 4 }];
+    },
+    dial: () => connect({ host: "127.0.0.1", port: fixture.port, family: 4 }),
+  });
+  t.after(() => proxy.close());
+  t.after(() => releaseLookup());
+  const endpoint = new URL(await proxy.start());
+  const downstream = connect(Number(endpoint.port), "127.0.0.1");
+  downstream.on("error", () => {});
+  await once(downstream, "connect");
+  downstream.write("CONNECT cancel.example.test:443 HTTP/1.1\r\nHost: cancel.example.test:443\r\n\r\n");
+  await lookupStarted;
+  const closed = new Promise<void>((resolve) => {
+    downstream.once("close", resolve);
+  });
+  downstream.destroy();
+  await closed;
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  releaseLookup();
+  await Promise.race([
+    connected,
+    new Promise((resolve) => setTimeout(resolve, 100)),
+  ]);
+  assert.equal(upstreamConnections, 0);
+});
+
+test("Safe Proxy cleans up a pending CONNECT socket when the client disconnects", async (t) => {
+  let dialStarted!: (socket: Socket) => void;
+  const started = new Promise<Socket>((resolve) => {
+    dialStarted = resolve;
+  });
+  const proxy = new SafeProxy({
+    connectionTimeoutMs: 5_000,
+    lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    dial: () => {
+      const socket = new Socket();
+      Object.defineProperty(socket, "readyState", { value: "opening" });
+      dialStarted(socket);
+      return socket;
+    },
+  });
+  t.after(() => proxy.close());
+  const endpoint = new URL(await proxy.start());
+  const downstream = connect(Number(endpoint.port), "127.0.0.1");
+  downstream.on("error", () => {});
+  await once(downstream, "connect");
+  downstream.write("CONNECT cancel.example.test:443 HTTP/1.1\r\nHost: cancel.example.test:443\r\n\r\n");
+  const socket = await started;
+  const upstreamClosed = new Promise<void>((resolve) => {
+    socket.once("close", resolve);
+  });
+  const downstreamClosed = new Promise<void>((resolve) => {
+    downstream.once("close", resolve);
+  });
+  downstream.destroy();
+  await Promise.all([upstreamClosed, downstreamClosed]);
+  assert.equal(socket.destroyed, true);
+  // SafeProxy's dial timeout listener remains; waitForConnect's listeners are removed.
+  assert.equal(socket.listenerCount("connect"), 1);
+  assert.equal(socket.listenerCount("error"), 0);
+  assert.equal(socket.listenerCount("timeout"), 1);
 });
 
 test("Safe Proxy keeps an established CONNECT tunnel alive beyond the connect timeout", async (t) => {
