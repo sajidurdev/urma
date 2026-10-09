@@ -72,6 +72,7 @@ export class Singleflight {
         signal?.removeEventListener("abort", onAbort);
         observed.observers -= 1;
         if (observed.observers === 0 && !observed.settled) {
+          if (this.#entries.get(key) === observed) this.#entries.delete(key);
           observed.controller.abort();
         }
       };
