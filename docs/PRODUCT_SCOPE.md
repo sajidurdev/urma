@@ -89,6 +89,8 @@ the npm release; the launcher rejects it.
 Setup can register a generic JSON host entry. Registration uses the absolute
 Node executable recorded by setup, the absolute `launcher-v1.mjs` path, and
 the selected `URMA_DATA_DIR`. It preserves unrelated `mcpServers` entries.
+For an existing `urma` object, setup updates `command`, `args`, and
+`env.URMA_DATA_DIR` while preserving other host options and environment values.
 
 Normal MCP startup is local. It does not invoke npm, update the installation,
 look up native tools through `PATH`, or check provider freshness. A later setup
