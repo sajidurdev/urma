@@ -11,6 +11,7 @@ import type { InvestigationRef } from "../core/ids.js";
 import type { ResolvedSource } from "../sources/types.js";
 import { verifyPinnedLocalVideo } from "../sources/local.js";
 import { Ffmpeg } from "../subprocess/ffmpeg.js";
+import { Ffprobe } from "../subprocess/ffprobe.js";
 import { collectBinaryVersions } from "../subprocess/versions.js";
 import { BlobStore } from "../store/blob-store.js";
 import type { StoredArtifact, UrmaStore } from "../store/store.js";
@@ -22,6 +23,7 @@ import {
   isTimestampCovered,
   parseStoredBoundedVideoCoverage,
   parseStoredVideoCoverage,
+  parseVideoStreamCoverage,
   physicalSeekMs,
   type VideoPtsCoverage,
 } from "./video-timing.js";
@@ -52,7 +54,7 @@ export function exactFrameRequestKey(
     source.revision,
     "frame",
     { sourceRef: source.sourceRef, atMs, format: "jpeg" },
-    "frame-extractor",
+    "frame-extractor-v2",
   );
 }
 
@@ -91,10 +93,30 @@ function mediaForGlobalTimestamp(
     const coverage = parseStoredVideoCoverage(artifact.producer);
     if (coverage === null) return null;
     const nominalLocalMs = globalTimeMs - artifact.startMs;
-    if (!isTimestampCovered(coverage, nominalLocalMs)) return null;
+    const includesSourcePrefix =
+      artifact.startMs === 0 &&
+      artifact.producer.version === "evidence-copy" &&
+      artifact.producer.validatedSourcePrefix === "complete";
+    if (
+      !isTimestampCovered(
+        coverage,
+        nominalLocalMs,
+        includesSourcePrefix,
+      )
+    ) return null;
+    let seekMs: number;
+    try {
+      seekMs = physicalSeekMs(
+        coverage,
+        nominalLocalMs,
+        includesSourcePrefix,
+      );
+    } catch {
+      return null;
+    }
     return {
       path: mediaPath,
-      seekMs: physicalSeekMs(coverage, nominalLocalMs),
+      seekMs,
       parent: artifact,
       coverage,
       transportCacheHit,
@@ -105,9 +127,15 @@ function mediaForGlobalTimestamp(
   if (coverage === null) return null;
   const nominalLocalMs = globalTimeMs - artifact.startMs;
   if (!isTimestampCovered(coverage, nominalLocalMs)) return null;
+  let seekMs: number;
+  try {
+    seekMs = physicalSeekMs(coverage, nominalLocalMs);
+  } catch {
+    return null;
+  }
   return {
     path: mediaPath,
-    seekMs: physicalSeekMs(coverage, nominalLocalMs),
+    seekMs,
     parent: artifact,
     coverage,
     transportCacheHit,
@@ -313,21 +341,63 @@ export class FrameAcquirer {
         pinnedPath = "";
       }
       const rawTiming = source.safeMetadata.videoTiming;
-      const coverage = typeof rawTiming === "object" &&
+      let coverage = typeof rawTiming === "object" &&
           rawTiming !== null && !Array.isArray(rawTiming)
         ? parseStoredVideoCoverage(rawTiming as Record<string, unknown>)
         : null;
+      const legacyTiming = typeof rawTiming === "object" &&
+          rawTiming !== null && !Array.isArray(rawTiming) &&
+          (rawTiming as Record<string, unknown>)
+            .validatedVideoTimingVersion === 2;
+      let reprobeError: unknown;
+      if (pinnedPath && coverage === null && legacyTiming) {
+        try {
+          const probe = await measureDiagnosticAsync(
+            trace,
+            "mediaProbeTimingValidationMs",
+            () => new Ffprobe(this.config, this.remoteContext).inspect(
+              pinnedPath,
+              signal,
+            ),
+          );
+          const streams = Array.isArray(probe.streams)
+            ? (probe.streams as Array<Record<string, unknown>>)
+            : [];
+          const videoStream = streams.find(
+            (stream) => stream.codec_type === "video",
+          );
+          const format = typeof probe.format === "object" &&
+              probe.format !== null && !Array.isArray(probe.format)
+            ? (probe.format as Record<string, unknown>)
+            : {};
+          coverage = videoStream === undefined
+            ? null
+            : parseVideoStreamCoverage(videoStream, format.start_time);
+        } catch (error) {
+          if (normalizeError(error).code === "CANCELLED") throw error;
+          reprobeError = error;
+        }
+      }
       if (pinnedPath && coverage === null) {
         const error = new UrmaError(
           "MEDIA_INVALID",
-          "Local source has no valid retained video PTS coverage; the exact target is unavailable",
-          { detail: { reason: "local-timing-unavailable" } },
+          "Local source has no valid retained video PTS coverage and container start time; the exact target is unavailable",
+          {
+            detail: {
+              reason: reprobeError === undefined
+                ? "local-timing-unavailable"
+                : "local-timing-reprobe-failed",
+            },
+            ...(reprobeError === undefined ? {} : { cause: reprobeError }),
+          },
         );
         if (!allowTargetErrors) throw error;
         for (const time of missing) markTargetError(time, error);
       } else if (pinnedPath && coverage !== null) {
+        // The verified local snapshot contains the full input, so its first frame
+        // is a valid answer when a target predates the first video PTS.
         for (const time of missing) {
-          if (!isTimestampCovered(coverage, time)) {
+          if (!isTimestampCovered(coverage, time, true)) {
             const error = targetedDerivativeUnavailable(
               `Local source timing coverage does not include target ${time} ms`,
               { reason: "local-coverage-miss", targetMs: time },
@@ -336,9 +406,25 @@ export class FrameAcquirer {
             markTargetError(time, error);
             continue;
           }
+          let seekMs: number;
+          try {
+            seekMs = physicalSeekMs(coverage, time, true);
+          } catch (cause) {
+            const error = new UrmaError(
+              "MEDIA_INVALID",
+              "Local source container timing cannot map the exact target to an input seek position",
+              {
+                detail: { reason: "local-seek-origin-mismatch" },
+                cause,
+              },
+            );
+            if (!allowTargetErrors) throw error;
+            markTargetError(time, error);
+            continue;
+          }
           const media: FrameMedia = {
             path: pinnedPath,
-            seekMs: physicalSeekMs(coverage, time),
+            seekMs,
             parent: null,
             coverage,
             transportCacheHit: false,
@@ -595,7 +681,7 @@ export class FrameAcquirer {
           endMs: atMs,
           params: { atMs, format: "jpeg" },
           producer: {
-            version: "frame-extractor",
+            version: "frame-extractor-v2",
             urmaVersion: URMA_VERSION,
             ...versions,
             transportArtifactId: media.parent?.artifactId ?? null,

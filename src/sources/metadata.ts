@@ -626,7 +626,7 @@ export async function inspectLocal(
   const videoStream = streams.find((stream) => stream.codec_type === "video");
   const videoTiming = videoStream === undefined
     ? null
-    : parseVideoStreamCoverage(videoStream);
+    : parseVideoStreamCoverage(videoStream, format.start_time);
   const validatedTimeline = (() => {
     try {
       return validateProgressiveProbe(probe, "container");

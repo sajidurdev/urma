@@ -45,7 +45,7 @@ export class Ffmpeg {
         "-v",
         "error",
         "-ss",
-        (atMs / 1000).toFixed(3),
+        (atMs / 1000).toFixed(9),
         "-i",
         mediaInput.input,
         "-frames:v",

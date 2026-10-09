@@ -338,7 +338,7 @@ test("fixed cadence preserves canonical exact frames, panel mapping, and honest 
     assert(artifact);
     assert.equal(artifact.kind, "frame");
     assert.equal(artifact.role, "evidence");
-    assert.equal(artifact.producer.version, "frame-extractor");
+    assert.equal(artifact.producer.version, "frame-extractor-v2");
     assert.equal(artifact.params.atMs, slot.requestedAtMs);
   }
 });

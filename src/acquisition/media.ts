@@ -1059,16 +1059,19 @@ export class MediaAcquirer {
             { reason: "zero-video-stream" },
           );
         }
-        const coverage = parseVideoStreamCoverage(videoStream);
-        if (!coverage) {
-          throw targetedDerivativeUnavailable(
-            `Batched bounded section [${requirement.startMs},${requirement.endMs}) has no valid finite video PTS coverage; the bounded target is unavailable`,
-            { reason: "invalid-video-pts-coverage" },
-          );
-        }
         const format = typeof probe.format === "object" && probe.format !== null
           ? (probe.format as Record<string, unknown>)
           : {};
+        const coverage = parseVideoStreamCoverage(
+          videoStream,
+          format.start_time,
+        );
+        if (!coverage) {
+          throw targetedDerivativeUnavailable(
+            `Batched bounded section [${requirement.startMs},${requirement.endMs}) has no valid finite video PTS coverage or container start time; the bounded target is unavailable`,
+            { reason: "invalid-video-pts-coverage" },
+          );
+        }
         const durationSeconds = Number(format.duration);
         if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
           throw targetedDerivativeUnavailable(
@@ -1162,6 +1165,9 @@ export class MediaAcquirer {
           validatedDurationMs: Math.round(durationSeconds * 1_000),
           ...(spec.kind === "media_section"
             ? { requestedStartMs: spec.startMs, requestedEndMs: spec.endMs }
+            : {}),
+          ...(spec.kind === "evidence_media"
+            ? { validatedSourcePrefix: "complete" }
             : {}),
           ...(coverage === null ? {} : serializeVideoPtsCoverage(coverage)),
         },
@@ -1354,28 +1360,29 @@ export class MediaAcquirer {
                         `${spec.operation} artifact has no video stream; retry with an updated yt-dlp`,
                       );
                     }
+                    const format = typeof probe.format === "object" &&
+                        probe.format !== null
+                      ? (probe.format as Record<string, unknown>)
+                      : {};
                     const requiresExactTiming =
-                      spec.kind === "media_section" || spec.kind === "evidence_media";
+                      spec.kind === "media_section" ||
+                      spec.kind === "evidence_media";
                     const coverage = requiresExactTiming
-                      ? parseVideoStreamCoverage(videoStream)
+                      ? parseVideoStreamCoverage(videoStream, format.start_time)
                       : null;
                     if (coverage === null && requiresExactTiming) {
                       if (spec.kind === "media_section") {
                         throw targetedDerivativeUnavailable(
-                          `${spec.operation} artifact has no valid finite video PTS coverage; the bounded target is unavailable`,
+                          `${spec.operation} artifact has no valid finite video PTS coverage or container start time; the bounded target is unavailable`,
                           { reason: "invalid-video-pts-coverage" },
                         );
                       }
                       throw new UrmaError(
                         "MEDIA_INVALID",
-                        `${spec.operation} artifact has no valid finite video PTS coverage; exact frames are unavailable`,
+                        `${spec.operation} artifact has no valid finite video PTS coverage or container start time; exact frames are unavailable`,
                         { detail: { reason: "invalid-video-pts-coverage" } },
                       );
                     }
-                    const format =
-                      typeof probe.format === "object" && probe.format !== null
-                        ? (probe.format as Record<string, unknown>)
-                        : {};
                     const durationSeconds = Number(format.duration);
                     if (
                       !Number.isFinite(durationSeconds) ||
