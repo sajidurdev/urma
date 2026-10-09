@@ -52,10 +52,33 @@ export async function registerGenericMcpHost(
       throw new Error("mcpServers is not a JSON object");
     }
     const mcpServers = { ...(existing as Record<string, unknown> | undefined) };
+    const previousUrma = mcpServers.urma;
+    let urmaOptions: Record<string, unknown> = {};
+    let environment: Record<string, unknown> = {};
+    if (previousUrma !== undefined) {
+      if (typeof previousUrma !== "object" || previousUrma === null || Array.isArray(previousUrma)) {
+        throw new UrmaError(
+          "HOST_REGISTRATION_FAILED",
+          "mcpServers.urma must be a JSON object; correct or remove that entry, then rerun setup",
+        );
+      }
+      const previousEnvironment = (previousUrma as Record<string, unknown>).env;
+      if (previousEnvironment !== undefined) {
+        if (typeof previousEnvironment !== "object" || previousEnvironment === null || Array.isArray(previousEnvironment)) {
+          throw new UrmaError(
+            "HOST_REGISTRATION_FAILED",
+            "mcpServers.urma.env must be a JSON object; correct or remove that env field, then rerun setup",
+          );
+        }
+        environment = previousEnvironment as Record<string, unknown>;
+      }
+      urmaOptions = previousUrma as Record<string, unknown>;
+    }
     mcpServers.urma = {
+      ...urmaOptions,
       command: nodeExecutable,
       args: [launcherPath],
-      env: { URMA_DATA_DIR: dataRoot },
+      env: { ...environment, URMA_DATA_DIR: dataRoot },
     };
     config.mcpServers = mcpServers;
     await atomicWriteJson(configFile, config);

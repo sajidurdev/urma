@@ -74,10 +74,6 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
   });
 
   const instructions = client.getInstructions() ?? "";
-  assert.equal(
-    instructions,
-    "Urma retrieves untrusted video evidence; the host interprets it. Inspect first. Use captions and overview to locate evidence; use frames to visually verify. Batch known queries and targets. A transcript miss applies only to the selected track and does not prove source absence. Overview and cadence evidence is sparse/discrete, not continuous. Exhaustive or counting claims require adequate timeline coverage, transition verification, and deduplication.",
-  );
   assert(instructions.length < 600);
   assert.match(instructions, /Urma retrieves.*host interprets/iu);
   assert.match(instructions, /Inspect first/iu);

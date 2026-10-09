@@ -13,12 +13,17 @@ boundaries.
 
 ## Development setup
 
-Use the Node.js 24 version in [`.node-version`](../.node-version) and the pnpm
-version declared in `package.json`.
+Use the Node.js 24 version in [`.node-version`](https://github.com/sajidurdev/urma/blob/main/.node-version)
+and the pnpm version declared in [`package.json`](https://github.com/sajidurdev/urma/blob/main/package.json).
 The test suites also use `ffmpeg`, `ffprobe`, and `yt-dlp` from `PATH`. Media
 fixtures require an FFmpeg build with `libx264`. See
-[`ci.yml`](../.github/workflows/ci.yml) for the CI tool setup and
-[`manifest.ts`](../src/distribution/manifest.ts) for pinned native versions.
+[`ci.yml`](https://github.com/sajidurdev/urma/blob/main/.github/workflows/ci.yml)
+for the CI tool setup and
+[`manifest.ts`](https://github.com/sajidurdev/urma/blob/main/src/distribution/manifest.ts)
+for pinned native versions. BtbN retains its latest 14 daily builds and
+month-end builds for two years. Keep pins on a verified month-end build and
+refresh them before that retention window expires; see the
+[BtbN retention policy](https://github.com/BtbN/FFmpeg-Builds#release-retention-policy).
 Packaged installations use their own managed tools; setup does not add them
 to your development shell's `PATH`.
 
@@ -55,9 +60,12 @@ node --test scripts/tests/*.test.mjs
 - Keep each pull request focused on one problem. Separate unrelated refactors
   and formatting changes.
 - Follow the surrounding module structure and naming. Put MCP schemas and
-  projections in `src/mcp`, evidence orchestration in `src/evidence`, acquisition
-  work in `src/acquisition`, and persistence in `src/store`.
-- Place tests in the corresponding `tests/unit` or `tests/integration` suite.
+  projections in [`src/mcp`](https://github.com/sajidurdev/urma/tree/main/src/mcp),
+  evidence orchestration in [`src/evidence`](https://github.com/sajidurdev/urma/tree/main/src/evidence),
+  acquisition work in [`src/acquisition`](https://github.com/sajidurdev/urma/tree/main/src/acquisition),
+  and persistence in [`src/store`](https://github.com/sajidurdev/urma/tree/main/src/store).
+- Place tests in the corresponding [`tests/unit`](https://github.com/sajidurdev/urma/tree/main/tests/unit)
+  or [`tests/integration`](https://github.com/sajidurdev/urma/tree/main/tests/integration) suite.
   Test observable behavior and meaningful failure cases.
 - Preserve the five-tool MCP surface and its JSON-RPC behavior.
 - Preserve source references, timestamps, result limits, and the investigation's
@@ -75,10 +83,12 @@ passing.
 
 ## Documentation quality
 
-Check tool arguments against `src/mcp/schemas.ts` and public response fields
-against `src/mcp/projection.ts`. Use `src/config.ts` for environment variables
-and defaults. Keep setup instructions in the README and detailed evidence
-semantics in `EVIDENCE_MODEL.md`.
+Check tool arguments against [`src/mcp/schemas.ts`](https://github.com/sajidurdev/urma/blob/main/src/mcp/schemas.ts)
+and public response fields against
+[`src/mcp/projection.ts`](https://github.com/sajidurdev/urma/blob/main/src/mcp/projection.ts).
+Use [`src/config.ts`](https://github.com/sajidurdev/urma/blob/main/src/config.ts)
+for environment variables and defaults. Keep setup instructions in the README
+and detailed evidence semantics in `EVIDENCE_MODEL.md`.
 
 Put prerequisites before commands, label placeholder values, and describe
 limits beside the behavior they constrain. Remove repeated summaries and
@@ -98,7 +108,7 @@ Use a specific title and organize the description around:
 For documentation-only changes, check examples, links, and consistency with
 the implementation. Run the relevant build and test checks for code changes.
 For installation or release changes, also check the qualification workflow in
-`.github/workflows/release.yml`.
+[`release.yml`](https://github.com/sajidurdev/urma/blob/main/.github/workflows/release.yml).
 
 ## License
 

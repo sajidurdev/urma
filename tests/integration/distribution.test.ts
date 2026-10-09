@@ -259,20 +259,94 @@ test("ACTIVE recovery, missing generations, and tool corruption fail closed", as
   assert.match(missing.stderr, /is missing|rerun setup/iu);
 });
 
-test("generic host registration preserves unrelated configuration and uses absolute launcher paths", async (t) => {
+test("generic host registration preserves host options and environment across setup updates", async (t) => {
   const parent = await mkdtemp(path.join(os.tmpdir(), "urma host registration-"));
   const root = path.join(parent, "root");
   const configFile = path.join(parent, "client.json");
   const fixture = makeFixtureManifest();
   t.after(async () => await rm(parent, { recursive: true, force: true }));
-  await writeFile(configFile, JSON.stringify({ unrelated: { keep: true }, mcpServers: { other: { command: "other" } } }));
-  const result = await setup(setupOptions(root, fixture, { client: "generic", clientConfig: configFile }));
-  assert.equal(result.hostRegistration.status, "success");
-  const config = JSON.parse(await readFile(configFile, "utf8")) as { unrelated: { keep: boolean }; mcpServers: { urma: { command: string; args: string[]; env: { URMA_DATA_DIR: string } } } };
+  await writeFile(configFile, JSON.stringify({
+    unrelated: { keep: true },
+    mcpServers: { other: { command: "other" } },
+  }));
+  const options = { client: "generic" as const, clientConfig: configFile };
+  const first = await setup(setupOptions(root, fixture, options));
+  assert.equal(first.hostRegistration.status, "success");
+  const firstConfig = JSON.parse(await readFile(configFile, "utf8")) as {
+    unrelated: { keep: boolean };
+    mcpServers: {
+      other: { command: string };
+      urma: {
+        command: string;
+        args: string[];
+        env: Record<string, string>;
+        [key: string]: unknown;
+      };
+    };
+  };
+  assert.equal(firstConfig.unrelated.keep, true);
+  assert.equal(firstConfig.mcpServers.other.command, "other");
+  assert.equal(firstConfig.mcpServers.urma.command, process.execPath);
+  assert.equal(firstConfig.mcpServers.urma.args[0], path.join(root, "launcher-v1.mjs"));
+  assert.equal(firstConfig.mcpServers.urma.env.URMA_DATA_DIR, root);
+
+  await writeFile(configFile, JSON.stringify({
+    ...firstConfig,
+    mcpServers: {
+      ...firstConfig.mcpServers,
+      urma: {
+        ...firstConfig.mcpServers.urma,
+        command: "old-node",
+        args: ["old-launcher"],
+        customHostOption: { preserve: true },
+        env: {
+          ...firstConfig.mcpServers.urma.env,
+          URMA_LOCAL_ROOTS: "C:\\Videos",
+          URMA_DEBUG: "true",
+          CUSTOM_HOST_SETTING: "keep-me",
+        },
+      },
+    },
+  }));
+
+  const second = await setup(setupOptions(root, fixture, options));
+  assert.equal(second.hostRegistration.status, "success");
+  const config = JSON.parse(await readFile(configFile, "utf8")) as typeof firstConfig;
   assert.equal(config.unrelated.keep, true);
+  assert.equal(config.mcpServers.other.command, "other");
   assert.equal(config.mcpServers.urma.command, process.execPath);
   assert.equal(config.mcpServers.urma.args[0], path.join(root, "launcher-v1.mjs"));
   assert.equal(config.mcpServers.urma.env.URMA_DATA_DIR, root);
+  assert.deepEqual(config.mcpServers.urma.customHostOption, { preserve: true });
+  assert.equal(config.mcpServers.urma.env.URMA_LOCAL_ROOTS, "C:\\Videos");
+  assert.equal(config.mcpServers.urma.env.URMA_DEBUG, "true");
+  assert.equal(config.mcpServers.urma.env.CUSTOM_HOST_SETTING, "keep-me");
+});
+
+test("generic host registration reports malformed Urma entries without overwriting them", async (t) => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), "urma malformed host registration-"));
+  const fixture = makeFixtureManifest();
+  t.after(async () => await rm(parent, { recursive: true, force: true }));
+
+  const malformedEntries = [
+    { name: "entry", urma: "not-an-object", detail: "mcpServers.urma must be a JSON object" },
+    { name: "env", urma: { env: "not-an-object" }, detail: "mcpServers.urma.env must be a JSON object" },
+  ] as const;
+  for (const { name, urma, detail } of malformedEntries) {
+    const root = path.join(parent, `root-${name}`);
+    const configFile = path.join(parent, `client-${name}.json`);
+    const original = { mcpServers: { urma } };
+    await writeFile(configFile, JSON.stringify(original));
+    const result = await setup(setupOptions(root, fixture, {
+      client: "generic",
+      clientConfig: configFile,
+    }));
+    assert.equal(result.runtimeInstallation, "healthy");
+    assert.equal(result.hostRegistration.status, "failure");
+    assert.ok(result.hostRegistration.detail.includes(detail));
+    assert.ok(result.hostRegistration.detail.includes("rerun setup"));
+    assert.deepEqual(JSON.parse(await readFile(configFile, "utf8")), original);
+  }
 });
 
 test("concurrent setup attempts serialize on one installation lock", async (t) => {

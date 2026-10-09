@@ -45,7 +45,9 @@ export type TargetReleaseManifest = Readonly<{
   licensing: Readonly<{ notices: readonly string[] }>;
 }>;
 
-const BTBN_RELEASE = "autobuild-2026-09-22-13-18";
+// Pin the latest verified build of a month; BtbN retains month-end builds for two years.
+const BTBN_RELEASE = "autobuild-2026-09-30-13-08";
+const BTBN_VERSION = "N-127032-g6ae491a26c";
 const BTBN_NOTICE = `https://github.com/BtbN/FFmpeg-Builds/releases/tag/${BTBN_RELEASE}`;
 const YTDLP_VERSION = "2026.08.19";
 const YTDLP_NOTICE = `https://github.com/yt-dlp/yt-dlp/blob/${YTDLP_VERSION}/LICENSE`;
@@ -62,7 +64,7 @@ function btbN(
   return {
     kind: "ffmpeg",
     provider: "BtbN FFmpeg-Builds",
-    upstreamVersion: "N-126755-g52f05ac780",
+    upstreamVersion: BTBN_VERSION,
     upstreamRelease: BTBN_RELEASE,
     url,
     archiveFormat: file.endsWith(".tar.xz") ? "tar.xz" : "zip",
@@ -197,30 +199,30 @@ function release(
 
 const linuxX64 = btbN(
   "linux-x64-glibc",
-  "ffmpeg-N-126755-g52f05ac780-linux64-lgpl.tar.xz",
-  "0633931dc33051d458aeade95644930be9e03673d1bde8ee5264ef64d3a3a8e4",
-  138318052,
+  "ffmpeg-N-127032-g6ae491a26c-linux64-lgpl.tar.xz",
+  "82ccd41f4c04ac6f1633920c83eb4c73c6c9dc954d64da10a2410c1277b83647",
+  140614116,
   "",
 );
 const linuxArm64 = btbN(
   "linux-arm64-glibc",
-  "ffmpeg-N-126755-g52f05ac780-linuxarm64-lgpl.tar.xz",
-  "967e786244c0ec29f5d8830053e6d78ce203bb6f8e986c0de03f740d38199c75",
-  117567856,
+  "ffmpeg-N-127032-g6ae491a26c-linuxarm64-lgpl.tar.xz",
+  "1f3190187f4027e2335c2542f6c3a73cf51e81820b200f3c75cfdca0d7a0b624",
+  119163928,
   "",
 );
 const windowsX64 = btbN(
   "windows-x64",
-  "ffmpeg-N-126755-g52f05ac780-win64-lgpl.zip",
-  "5e38777db1e69a8565f49619740394b2a5742dfdc3cec835a1ddf18b2a6cdb78",
-  172097692,
+  "ffmpeg-N-127032-g6ae491a26c-win64-lgpl.zip",
+  "c73ad424c5f9d94dd48815b4d3531e57130cb9f5c3dc8f21f4aa4e1fdb0658e3",
+  176142306,
   ".exe",
 );
 const windowsArm64 = btbN(
   "windows-arm64",
-  "ffmpeg-N-126755-g52f05ac780-winarm64-lgpl.zip",
-  "170aa399507a308323c1b86a704a360f542acec8b67e26fd43ea1f17613f6a0e",
-  118810363,
+  "ffmpeg-N-127032-g6ae491a26c-winarm64-lgpl.zip",
+  "cec4353287a44b0b9de49000961e6161a3393e8bf56cc9b18717d8906735b121",
+  121433592,
   ".exe",
 );
 

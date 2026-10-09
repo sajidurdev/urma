@@ -3,6 +3,7 @@ import {
   Agent,
   createServer,
   request as httpRequest,
+  type ClientRequest,
   type IncomingHttpHeaders,
   type Server,
   type ServerResponse,
@@ -296,6 +297,7 @@ function responseHeaders(headers: IncomingHttpHeaders): Record<string, string | 
 }
 
 function sendProxyError(response: ServerResponse, status: number): void {
+  if (response.destroyed || response.writableEnded) return;
   if (response.headersSent) {
     response.destroy();
     return;
@@ -316,6 +318,7 @@ function waitForConnect(socket: Socket, timeoutMs: number): Promise<void> {
       clearTimeout(timer);
       socket.off("connect", onConnect);
       socket.off("error", onError);
+      socket.off("close", onClose);
       socket.off("timeout", onTimeout);
     };
     const finish = (error?: Error) => {
@@ -327,11 +330,14 @@ function waitForConnect(socket: Socket, timeoutMs: number): Promise<void> {
     };
     const onConnect = () => finish();
     const onError = (error: Error) => finish(error);
+    const onClose = () => finish(new Error("Safe Proxy upstream connection closed before connecting"));
     const onTimeout = () => finish(new Error("Safe Proxy upstream connection timed out"));
     socket.once("connect", onConnect);
     socket.once("error", onError);
+    socket.once("close", onClose);
     socket.once("timeout", onTimeout);
     if (socket.readyState === "open") finish();
+    else if (socket.destroyed || socket.readyState === "closed") onClose();
   });
 }
 
@@ -405,6 +411,11 @@ export class SafeProxy {
         rejectPromise(error);
       });
       server.listen(0, "127.0.0.1", () => {
+        if (this.#closed) {
+          server.close();
+          rejectPromise(new UrmaError("CANCELLED", "Safe Proxy was closed while starting"));
+          return;
+        }
         const address = server.address();
         if (!address || typeof address === "string") {
           server.close();
@@ -523,10 +534,36 @@ export class SafeProxy {
       sendProxyError(response, 403);
       return;
     }
+    let clientDisconnected = request.aborted || response.destroyed;
+    let outgoing: ClientRequest | null = null;
+    let agent: Agent | null = null;
+    const clearClientListeners = () => {
+      request.off("aborted", onClientDisconnect);
+      response.off("close", onClientDisconnect);
+      response.off("finish", clearClientListeners);
+    };
+    const onClientDisconnect = () => {
+      if (response.writableEnded) {
+        clearClientListeners();
+        return;
+      }
+      clientDisconnected = true;
+      outgoing?.destroy();
+      agent?.destroy();
+      clearClientListeners();
+    };
+    request.once("aborted", onClientDisconnect);
+    response.once("close", onClientDisconnect);
+    response.once("finish", clearClientListeners);
+    if (clientDisconnected) {
+      clearClientListeners();
+      return;
+    }
     let target: ValidatedTarget;
     try {
       target = await this.#resolveTarget(rawUrl, "input");
     } catch {
+      if (clientDisconnected || response.destroyed) return;
       this.#record({
         kind: "http",
         method: request.method ?? "GET",
@@ -538,19 +575,25 @@ export class SafeProxy {
       sendProxyError(response, 403);
       return;
     }
-    const agent = new Agent({
+    if (clientDisconnected || response.destroyed) return;
+    const upstreamAgent = new Agent({
       keepAlive: false,
       maxSockets: 1,
     });
-    agent.createConnection = () => this.#dial(target.address, target.port, target.family);
-    const outgoing = httpRequest({
+    agent = upstreamAgent;
+    upstreamAgent.createConnection = () => this.#dial(target.address, target.port, target.family);
+    const upstreamRequest = httpRequest({
       host: target.address,
       port: target.port,
       method: request.method,
       path: `${target.parsed.pathname}${target.parsed.search}`,
       headers: forwardedRequestHeaders(request.headers, target.parsed.host),
-      agent,
+      agent: upstreamAgent,
     }, (incoming) => {
+      if (clientDisconnected || response.destroyed || response.writableEnded) {
+        upstreamAgent.destroy();
+        return;
+      }
       this.#record({
         kind: "http",
         method: request.method ?? "GET",
@@ -561,10 +604,11 @@ export class SafeProxy {
       });
       response.writeHead(incoming.statusCode ?? 502, incoming.statusMessage, responseHeaders(incoming.headers));
       incoming.pipe(response);
-      incoming.once("end", () => agent.destroy());
+      incoming.once("end", () => upstreamAgent.destroy());
     });
-    outgoing.once("error", () => {
-      agent.destroy();
+    outgoing = upstreamRequest;
+    upstreamRequest.once("error", () => {
+      upstreamAgent.destroy();
       this.#record({
         kind: "http",
         method: request.method ?? "GET",
@@ -573,10 +617,11 @@ export class SafeProxy {
         port: target.port,
         outcome: "failed",
       });
-      sendProxyError(response, 502);
+      if (!clientDisconnected && !response.destroyed && !response.writableEnded) {
+        sendProxyError(response, 502);
+      }
     });
-    request.once("aborted", () => outgoing.destroy());
-    request.pipe(outgoing);
+    request.pipe(upstreamRequest);
   }
 
   async #handleConnect(
@@ -612,10 +657,27 @@ export class SafeProxy {
       client.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       return;
     }
+    let clientDisconnected = client.destroyed;
+    let tunnelEstablished = false;
+    let upstream: Socket | null = null;
+    const onClientEnd = () => {
+      if (tunnelEstablished) return;
+      clientDisconnected = true;
+      upstream?.destroy();
+      client.end();
+    };
+    const onClientClose = () => {
+      clientDisconnected = true;
+      upstream?.destroy();
+    };
+    client.once("end", onClientEnd);
+    client.once("close", onClientClose);
+    if (clientDisconnected) return;
     let target: ValidatedTarget;
     try {
       target = await this.#resolveTarget(`https://${authority}/`, "input");
     } catch {
+      if (clientDisconnected || client.destroyed) return;
       this.#record({
         kind: "connect",
         method: "CONNECT",
@@ -627,11 +689,13 @@ export class SafeProxy {
       client.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       return;
     }
-    const upstream = this.#dial(target.address, 443, target.family);
+    if (clientDisconnected || client.destroyed) return;
+    upstream = this.#dial(target.address, 443, target.family);
     try {
       await waitForConnect(upstream, this.#options.connectionTimeoutMs);
     } catch {
       upstream.destroy();
+      if (clientDisconnected || client.destroyed) return;
       this.#record({
         kind: "connect",
         method: "CONNECT",
@@ -643,6 +707,11 @@ export class SafeProxy {
       client.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
       return;
     }
+    if (clientDisconnected || client.destroyed) {
+      upstream.destroy();
+      return;
+    }
+    tunnelEstablished = true;
     this.#record({
       kind: "connect",
       method: "CONNECT",
@@ -657,11 +726,10 @@ export class SafeProxy {
     upstream.pipe(client);
     const closeBoth = () => {
       client.destroy();
-      upstream.destroy();
+      upstream?.destroy();
     };
     client.once("error", closeBoth);
     upstream.once("error", closeBoth);
-    client.once("close", () => upstream.destroy());
     upstream.once("close", () => client.destroy());
   }
 }

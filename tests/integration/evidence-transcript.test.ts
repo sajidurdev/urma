@@ -134,7 +134,6 @@ test("direct Evidence API reuses source cache without cross-investigation transc
       .length,
     1,
   );
-  await new Promise((resolve) => setTimeout(resolve, 10));
   await writeFile(
     path.join(fixture.directory, "fixture.vtt"),
     "WEBVTT\n\n00:00:00.500 --> 00:00:01.500\nRevised caption evidence\n",

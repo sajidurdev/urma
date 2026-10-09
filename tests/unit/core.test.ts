@@ -136,6 +136,55 @@ test("singleflight cancels shared work only when all observers detach and permit
   );
 });
 
+test("singleflight detaches a cancelled pending entry before an immediate retry", async () => {
+  const flight = new Singleflight();
+  const controller = new AbortController();
+  let oldRuns = 0;
+  let replacementRuns = 0;
+  let startedOld!: () => void;
+  let releaseOld!: () => void;
+  let releaseReplacement!: () => void;
+  const oldStarted = new Promise<void>((resolve) => {
+    startedOld = resolve;
+  });
+  const oldGate = new Promise<string>((resolve) => {
+    releaseOld = () => resolve("stale");
+  });
+  const replacementGate = new Promise<string>((resolve) => {
+    releaseReplacement = () => resolve("fresh");
+  });
+
+  const oldObserver = flight.run("retry-race", controller.signal, async () => {
+    oldRuns += 1;
+    startedOld();
+    return await oldGate;
+  });
+  await oldStarted;
+  controller.abort();
+  await assert.rejects(
+    oldObserver,
+    (error: unknown) =>
+      error instanceof Error && "code" in error && error.code === "CANCELLED",
+  );
+
+  const replacement = flight.run("retry-race", undefined, async () => {
+    replacementRuns += 1;
+    return await replacementGate;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(oldRuns, 1);
+  assert.equal(replacementRuns, 1);
+
+  // The old worker ignores abort and settles after the replacement is installed.
+  releaseOld();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(flight.size, 1);
+
+  releaseReplacement();
+  assert.equal(await replacement, "fresh");
+  assert.equal(flight.size, 0);
+});
+
 test("frame transport policy is deterministic and never selects progressive remote seeks", () => {
   const base = {
     kind: "remote",

@@ -26,6 +26,7 @@ import type { ResolvedSource } from "./types.js";
 import { parseYouTubeUrl } from "./youtube.js";
 import { hydrateCaptionTracks } from "./caption-tracks.js";
 import { assertRemoteTargetAllowed } from "../remote/egress.js";
+import { Singleflight } from "../acquisition/singleflight.js";
 import {
   type RemoteOperationContext,
 } from "../remote/worker.js";
@@ -218,6 +219,8 @@ export function materializeResolvedSource(
 }
 
 export class SourceResolver {
+  readonly #remoteResolutions = new Singleflight();
+
   constructor(
     readonly config: UrmaConfig,
     readonly store: UrmaStore,
@@ -286,8 +289,29 @@ export class SourceResolver {
           return { source, cacheHit: true };
         }
       }
-      const source = await inspectYouTube(input, this.config, this.remoteContext, signal);
-      this.#save(source, [input, youtube.canonicalUrl]);
+      const inspect = async (workerSignal?: AbortSignal): Promise<ResolvedSource> => {
+        const source = await inspectYouTube(
+          input,
+          this.config,
+          this.remoteContext,
+          workerSignal,
+        );
+        if (workerSignal?.aborted) {
+          throw new UrmaError(
+            "CANCELLED",
+            "Remote source resolution was cancelled before its snapshot could be saved",
+          );
+        }
+        this.#save(source, [input, youtube.canonicalUrl]);
+        return source;
+      };
+      const source = freshness === "reuse"
+        ? await this.#remoteResolutions.run(
+          `youtube:${youtube.sourceRef}`,
+          signal,
+          (workerSignal) => inspect(workerSignal),
+        )
+        : await inspect(signal);
       return { source, cacheHit: false };
     }
     if (/^https?:\/\//i.test(input)) {
@@ -317,28 +341,44 @@ export class SourceResolver {
         return await this.#refresh(input, aliased, signal);
       }
       const revision = createSnapshotRevision();
-      let source: ResolvedSource;
-      let aliases: string[] = [input];
-      if (this.remoteResolutionProvider) {
-        const result = await this.remoteResolutionProvider(input, signal);
-        if (!remoteResolutionResult(result)) {
-          throw new UrmaError(
-            "SOURCE_UNAVAILABLE",
-            "Remote resolver returned no validated resolution snapshot",
+      const inspect = async (workerSignal?: AbortSignal): Promise<ResolvedSource> => {
+        let source: ResolvedSource;
+        let aliases: string[] = [input];
+        if (this.remoteResolutionProvider) {
+          const result = await this.remoteResolutionProvider(input, workerSignal);
+          if (!remoteResolutionResult(result)) {
+            throw new UrmaError(
+              "SOURCE_UNAVAILABLE",
+              "Remote resolver returned no validated resolution snapshot",
+            );
+          }
+          source = normalizeRemoteResolution(result, revision);
+          aliases = [input, result.canonicalUrl, ...(result.redirectUrls ?? [])];
+        } else {
+          source = await inspectGenericRemote(
+            input,
+            this.config,
+            this.remoteContext,
+            workerSignal,
+            revision,
           );
         }
-        source = normalizeRemoteResolution(result, revision);
-        aliases = [input, result.canonicalUrl, ...(result.redirectUrls ?? [])];
-      } else {
-        source = await inspectGenericRemote(
-          input,
-          this.config,
-          this.remoteContext,
+        if (workerSignal?.aborted) {
+          throw new UrmaError(
+            "CANCELLED",
+            "Remote source resolution was cancelled before its snapshot could be saved",
+          );
+        }
+        this.#save(source, aliases);
+        return source;
+      };
+      const source = freshness === "reuse"
+        ? await this.#remoteResolutions.run(
+          `http:${input}`,
           signal,
-          revision,
-        );
-      }
-      this.#save(source, aliases);
+          (workerSignal) => inspect(workerSignal),
+        )
+        : await inspect(signal);
       return { source, cacheHit: false };
     }
     const pinned = await this.#pinLocalBundle(input);

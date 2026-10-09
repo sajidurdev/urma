@@ -67,7 +67,7 @@ URLs, and personal paths before posting logs.
 ### Requirements
 
 - Native Node.js 24 LTS (`>=24 <25`).
-- A user-owned local filesystem for Urma's data root.
+- A user-owned local filesystem with at least 1 GiB free for Urma's data root.
 - One of these runtime targets: Windows x64 or arm64, macOS x64 or arm64, or
   Linux x64 or arm64 with glibc.
 
@@ -113,8 +113,10 @@ installation boundary.
 
 ### Register a generic JSON host
 
-If the host uses the usual `mcpServers` JSON shape, setup can add the `urma`
-entry and preserve the other entries in the file:
+If the host uses the usual `mcpServers` JSON shape, setup can add or update the
+`urma` entry and preserve other entries. For an existing `urma` object, setup
+replaces `command`, `args`, and `env.URMA_DATA_DIR` while preserving other host
+options and environment values:
 
 ```sh
 npx -y urma-mcp@rc setup --client generic --config "/absolute/path/to/mcp.json"
