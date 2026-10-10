@@ -29,7 +29,7 @@ import { assertRemoteTargetAllowed } from "../remote/egress.js";
 import { Singleflight } from "../acquisition/singleflight.js";
 import {
   type RemoteOperationContext,
-} from "../remote/worker.js";
+} from "../remote/operation-context.js";
 import {
   normalizeRemoteResolution,
   type RemoteResolutionResult,

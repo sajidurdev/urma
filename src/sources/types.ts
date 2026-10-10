@@ -10,7 +10,7 @@ import type {
   SourceKind,
   TranscriptKind,
 } from "../core/model.js";
-import type { RemoteAcquisitionBoundary } from "../remote/worker.js";
+import type { RemoteAcquisitionBoundary } from "../remote/operation-context.js";
 
 export type CaptionVariantSummary = Readonly<{
   variantId: string;

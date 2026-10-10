@@ -241,7 +241,28 @@ test("ACTIVE recovery, missing generations, and tool corruption fail closed", as
   assert(afterRecovery);
   assert.equal(afterRecovery.active, backup.active);
 
-  const receipt = JSON.parse(await readFile(path.join(root, "installs", afterRecovery.active, "receipt.json"), "utf8")) as { tools: { ffmpeg: { relativePath: string } } };
+  const receiptPath = path.join(root, "installs", afterRecovery.active, "receipt.json");
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8")) as {
+    node: { version: string };
+    tools: { ffmpeg: { relativePath: string } };
+  };
+  const originalNodeVersion = receipt.node.version;
+  try {
+    for (const unsupportedVersion of ["22.15.999", "25.0.0"]) {
+      receipt.node.version = unsupportedVersion;
+      await writeFile(receiptPath, JSON.stringify(receipt));
+      const unsupportedReceipt = await runLauncher(root, ["--version"]);
+      assert.notEqual(unsupportedReceipt.status, 0, unsupportedVersion);
+      assert.match(
+        `${unsupportedReceipt.stdout}\n${unsupportedReceipt.stderr}`,
+        /records unsupported Node\.js/u,
+      );
+    }
+  } finally {
+    receipt.node.version = originalNodeVersion;
+    await writeFile(receiptPath, JSON.stringify(receipt));
+  }
+
   const ffmpeg = path.join(root, "installs", afterRecovery.active, ...receipt.tools.ffmpeg.relativePath.split("/"));
   const original = await readFile(ffmpeg);
   try {

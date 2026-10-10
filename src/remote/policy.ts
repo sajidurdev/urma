@@ -70,7 +70,6 @@ export type RemotePolicyObservation = Readonly<{
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
-/** Apply the negative policy without enumerating providers */
 export function assertRemotePolicy(
   observation: RemotePolicyObservation,
 ): void {

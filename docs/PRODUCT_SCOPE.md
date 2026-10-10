@@ -62,7 +62,7 @@ speech from a video that has no supported caption track.
 ### Distribution and persistence
 
 - npm bootstrap through `urma-mcp`.
-- Native Node.js 24 LTS (`>=24 <25`).
+- Native Node.js `>=22.16.0 <23`, `>=24.0.0 <25`, or `>=26.0.0 <27`.
 - Supported targets: Windows x64/arm64, macOS x64/arm64, and Linux x64/arm64
   with glibc.
 - Generation-local FFmpeg, ffprobe, and yt-dlp supplied by the release

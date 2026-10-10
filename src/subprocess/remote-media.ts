@@ -1,5 +1,5 @@
 import { assertRemoteTargetAllowed } from "../remote/egress.js";
-import { ensureRemoteProxy, type RemoteOperationContext } from "../remote/worker.js";
+import { ensureRemoteProxy, type RemoteOperationContext } from "../remote/operation-context.js";
 import { UrmaError } from "../core/errors.js";
 
 function isWindowsDrivePath(value: string): boolean {
@@ -38,7 +38,7 @@ export type SubprocessMediaInput = Readonly<{
   inputFile?: string | undefined;
 }>;
 
-/** Keep filesystem media on an inherited regular-file descriptor, never a reusable path. */
+/** Read the opened descriptor so later path replacement cannot change the child's input */
 export async function subprocessMediaInput(
   value: string,
   context: RemoteOperationContext | null | undefined,

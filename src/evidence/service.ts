@@ -62,7 +62,7 @@ import {
   SourceResolver,
   type Freshness,
 } from "../sources/resolver.js";
-import type { RemoteOperationContext } from "../remote/worker.js";
+import type { RemoteOperationContext } from "../remote/operation-context.js";
 import type { CaptionTrackSummary, ResolvedSource } from "../sources/types.js";
 import { BlobStore } from "../store/blob-store.js";
 import type {

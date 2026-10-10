@@ -28,7 +28,7 @@ export function validateFixedCadenceSchedule(
   return schedule;
 }
 
-/** Count targets without an overflowing span-plus-cadence expression */
+/** Use BigInt because span + cadence can exceed the safe integer range */
 export function fixedCadenceTargetCount(
   schedule: FixedCadenceSchedule,
   durationMs?: number,
@@ -45,7 +45,7 @@ export function fixedCadenceTargetCount(
   return Number(count);
 }
 
-/** Derive a target from the original schedule start and index */
+/** Anchor each timestamp to the original start so pages share one cadence grid */
 export function fixedCadenceTargetAt(
   schedule: FixedCadenceSchedule,
   index: number,

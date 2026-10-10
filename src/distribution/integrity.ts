@@ -32,8 +32,8 @@ function receiptTool(receipt: Awaited<ReturnType<typeof readReceipt>>, kind: Run
 const successful = new WeakMap<UrmaConfig, Map<RuntimeToolKind, Promise<void>>>();
 
 /**
- * Verify a generation-local tool on first use in this process
- * Keep the result process-local; the receipt is not a fresh measurement
+ * Cache successful checks per config object
+ * Receipts store setup-time hashes; this checks the current files
  */
 export async function verifyRuntimeTool(
   config: UrmaConfig,

@@ -1,7 +1,7 @@
 import { readFile, rm, stat } from "node:fs/promises";
 import type { UrmaConfig } from "../config.js";
 import { UrmaError } from "../core/errors.js";
-import type { RemoteOperationContext } from "../remote/worker.js";
+import type { RemoteOperationContext } from "../remote/operation-context.js";
 import { runChecked, type ProcessResult, type RunOptions } from "./runner.js";
 import { subprocessMediaInput } from "./remote-media.js";
 import { verifyRuntimeTool } from "../distribution/integrity.js";

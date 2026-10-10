@@ -13,8 +13,8 @@ const VIDEO_EXTENSIONS = new Set([
 ]);
 
 /**
- * Direct-media records may omit vcodec for video containers
- * Keep the fallback in one place so policy, snapshots, and timeline checks agree
+ * Some direct-media records omit `vcodec`; a shared fallback keeps policy,
+ * snapshots, and timeline checks consistent
  */
 export function videoCodecForFormat(
   format: Readonly<Record<string, unknown>>,

@@ -13,7 +13,9 @@ boundaries.
 
 ## Development setup
 
-Use the Node.js 24 version in [`.node-version`](https://github.com/sajidurdev/urma/blob/main/.node-version)
+Urma supports Node.js `>=22.16.0 <23`, `>=24.0.0 <25`, or `>=26.0.0 <27`.
+For development and publishing, use Node.js 24.21.0 from
+[`.node-version`](https://github.com/sajidurdev/urma/blob/main/.node-version)
 and the pnpm version declared in [`package.json`](https://github.com/sajidurdev/urma/blob/main/package.json).
 The test suites also use `ffmpeg`, `ffprobe`, and `yt-dlp` from `PATH`. Media
 fixtures require an FFmpeg build with `libx264`. See
@@ -76,10 +78,16 @@ node --test scripts/tests/*.test.mjs
 - Use comments for non-obvious invariants or trade-offs. Keep local comments
   short and remove comments that only restate the next line.
 
-The native distribution and release workflow qualify the packed npm artifact
-on six platforms. Changes to installation, launchers, managed binaries, or
-release metadata require the corresponding distribution checks to remain
-passing.
+CI runs on every push and pull request against Node.js 22.16.0, the latest 22,
+the latest 24, and the latest Current 26. Release qualification runs the exact
+packed npm artifact on six supported platforms across those four runtimes (24
+platform/runtime combinations). Release packaging and npm publishing remain on
+the Node.js 24.21.0 toolchain pinned in `.node-version`. Changes to installation,
+launchers, managed binaries, or release metadata require the corresponding
+distribution checks to remain passing.
+
+Test release runs enforce the same correctness gate as RC and stable releases,
+with publication disabled.
 
 ## Documentation quality
 

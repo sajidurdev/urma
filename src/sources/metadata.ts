@@ -40,7 +40,7 @@ import type { SourceRef } from "../core/ids.js";
 import { safeFormatDescription } from "./candidates.js";
 import { assertRemoteTargetAllowed } from "../remote/egress.js";
 import { assertRemotePolicy, REMOTE_POLICY_VERSION } from "../remote/policy.js";
-import type { RemoteOperationContext } from "../remote/worker.js";
+import type { RemoteOperationContext } from "../remote/operation-context.js";
 import {
   normalizeRemoteResolution,
   remoteIdentityForResolution,

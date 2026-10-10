@@ -23,7 +23,7 @@ import {
   type BinaryVersions,
   collectBinaryVersions,
 } from "../subprocess/versions.js";
-import type { RemoteOperationContext } from "../remote/worker.js";
+import type { RemoteOperationContext } from "../remote/operation-context.js";
 import { BlobStore } from "../store/blob-store.js";
 import type { StoredArtifact, UrmaStore } from "../store/store.js";
 import { URMA_VERSION } from "../version.js";
@@ -964,7 +964,7 @@ export class MediaAcquirer {
         }
         if (missing.length === 0) continue;
         if (missing.length === 1) {
-          await this.#acquireSingleIntoOutcomes(
+          await this.#acquireOneSection(
             missing[0]!,
             outcomes,
             diagnostics,
@@ -1018,7 +1018,7 @@ export class MediaAcquirer {
             });
             continue;
           }
-          await this.#acquireSingleIntoOutcomes(
+          await this.#acquireOneSection(
             requirement,
             outcomes,
             diagnostics,
@@ -1233,7 +1233,7 @@ export class MediaAcquirer {
       );
     }
   }
-  async #acquireSingleIntoOutcomes(
+  async #acquireOneSection(
     requirement: SectionBatchRequirement,
     outcomes: Map<string, SectionAcquisitionResult>,
     diagnostics: BatchDiagnostics,

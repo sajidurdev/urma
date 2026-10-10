@@ -17,7 +17,7 @@
   ·
   <a href="#documentation">Documentation</a>
   <br /><br />
-  <sub><code>urma-mcp</code> · MCP stdio · Node.js 24 LTS</sub>
+  <sub><code>urma-mcp</code> · MCP stdio · Node.js 22.16+ (22.x), 24.x, 26.x</sub>
 </div>
 
 <br />
@@ -26,14 +26,25 @@
 
 Urma retrieves captions and sampled frames from videos with a known end time.
 Each result identifies its source snapshot and requested timestamps or range.
-The MCP host chooses what to retrieve and interprets the results.
+The host chooses what to retrieve, interprets the results, and decides how to
+process or send the evidence to a model.
 
 Urma runs locally and stores its cache on your filesystem. Remote videos still
-require network access. The host receives the requested evidence and controls
-how it is processed or sent to a model.
+require network access.
 
 The server uses MCP stdio. A host starts one Urma process for a session and
 owns its lifecycle. Urma does not run a daemon or expose an HTTP API.
+
+## Requirements
+
+- Native Node.js `>=22.16.0 <23`, `>=24.0.0 <25`, or `>=26.0.0 <27`.
+- A user-owned local filesystem with at least 1 GiB free for Urma's data root.
+- One of these runtime targets: Windows x64 or arm64, macOS x64 or arm64, or
+  Linux x64 or arm64 with glibc.
+
+Urma installs the pinned FFmpeg, ffprobe, and yt-dlp artifacts it needs. Do
+not install those tools separately for the packaged runtime. Urma does not
+install or manage Node.js.
 
 ## Try Urma
 
@@ -51,33 +62,11 @@ Example prompt (replace `<video URL>` with your source):
 > toggle is enabled. If the returned frames do not show the toggle clearly,
 > say that the evidence is insufficient.
 
-## RC testing
-
-External testers can report installation, MCP-host, or source/provider problems
-through the [RC bug-report template](https://github.com/sajidurdev/urma/issues/new?template=bug-report.md).
-Include reproduction steps, your OS/architecture, Node.js and host versions,
-the installed Urma version, and expected versus actual behavior. For a
-source-specific issue, include a public URL or a description of a reproducible
-local video. Add relevant [doctor output](#cli-and-maintenance) if setup
-completed; otherwise include the setup error. Remove credentials, private
-URLs, and personal paths before posting logs.
-
 ## Install and connect a host
-
-### Requirements
-
-- Native Node.js 24 LTS (`>=24 <25`).
-- A user-owned local filesystem with at least 1 GiB free for Urma's data root.
-- One of these runtime targets: Windows x64 or arm64, macOS x64 or arm64, or
-  Linux x64 or arm64 with glibc.
-
-Urma installs the pinned FFmpeg, ffprobe, and yt-dlp artifacts it needs. Do
-not install those tools separately for the packaged runtime. Urma does not
-install or manage Node.js.
 
 ### Install the runtime
 
-Run the npm bootstrap with Node.js 24:
+Run the npm bootstrap with a supported Node.js version:
 
 ```sh
 npx -y urma-mcp@rc setup
@@ -152,7 +141,9 @@ For a host with a different configuration format, create the equivalent
 stdio entry with the same absolute Node executable, launcher path, and
 `URMA_DATA_DIR` value.
 
-## Tools
+## Using Urma
+
+### Tools
 
 | Tool | Returns |
 | --- | --- |
@@ -162,83 +153,31 @@ stdio entry with the same absolute Node executable, launcher path, and
 | `get_overview` | A visual overview with up to 12 sampled cells. |
 | `get_frames` | Exact JPEG points, ordered sparse points, or a fixed-cadence schedule. |
 
-Call `inspect_video` first for a new source. It accepts an HTTP(S) URL, an
-allowed local path, or a previously returned `sourceRef`. It rejects sources
-that do not define one finite video timeline. The default `freshness: "reuse"`
-reuses a stored snapshot for a known remote URL or `sourceRef`. A local path
-is read again to check the video and sidecar content. Set `freshness: "refresh"`
-to resolve the source again. Every evidence request then uses the returned
-`investigationRef`.
-
-Use captions to locate likely time ranges, `get_overview` to locate visual
-moments, and `get_frames` to verify selected moments. These tools expose
-different observations:
-
-- Caption search and reads are limited to the selected source-provided track.
-- An overview is a sparse locator with up to 12 returned cells.
-- A frame burst is an ordered set of requested points.
-- A cadence request is a finite list of exact point requests. It reports each
-  page slot as `success`, `error`, or `unfinished`.
-
-A source cache can be reused across investigations, but evidence presentation
-is recorded per investigation.
+Call `inspect_video` for a new source, then use its `investigationRef` for each
+evidence request. A typical search starts with captions or an overview to find
+a time range, then uses `get_frames` to check selected moments.
 
 ### Source and caption inputs
 
-Urma uses yt-dlp to resolve public, finite, non-DRM video URLs. For RC and
-stable releases, six provider fixtures must pass the
-[compatibility gate](docs/PRODUCT_SCOPE.md#source-admission).
-Other providers are best effort; yt-dlp support alone does not guarantee that
-Urma can inspect a video. YouTube single-video URLs use a dedicated resolver
-path and are outside the six-provider gate.
+`inspect_video` accepts a policy-approved HTTP(S) source, a local path under
+`URMA_LOCAL_ROOTS`, or a returned `sourceRef`. By default,
+`freshness: "reuse"` reuses a remote snapshot; local files and sidecars are
+checked again. Use `freshness: "refresh"` to resolve the source again. Local
+`.vtt` and `.srt` sidecars are supported. See
+[Product scope](docs/PRODUCT_SCOPE.md#source-admission) for supported sources.
+The [Evidence Model](docs/EVIDENCE_MODEL.md) covers caption-track selection,
+search, and pagination.
 
-Urma accepts:
-
-- A generic HTTP(S) video URL admitted by the remote source policy.
-- A local video path under a root listed in `URMA_LOCAL_ROOTS`.
-
-Local caption sidecars are optional. Urma checks the video basename with `.vtt`
-first and `.srt` second. Local paths remain disabled when
-`URMA_LOCAL_ROOTS` is empty.
-
-`search_transcript` accepts either one `query` or a `queries` array. Its
-default mode is `phrase`; `terms` requires every normalized term to occur in a
-cue. Search is literal and case-insensitive after NFKC normalization. A
-matching caption is a lead for visual verification, not visual proof.
-
-`read_transcript` requires a source-global half-open interval,
-`[startMs,endMs)`. It returns at most 200 segments or 16,000 caption
-characters per page. To continue, pass `nextCursor` as `cursor` with the same
-investigation, interval, and selected track.
+Caption search and reads use one source-provided track; Urma does not
+transcribe speech. A caption match can locate a moment to verify with frames,
+but it does not establish that a visual event occurred.
 
 ### Visual inputs
 
-`get_overview` accepts an optional source-global interval. It requests 12
-temporally distributed cells. The returned timestamps are the samples that
-were observed; they do not describe continuous coverage.
-
-`get_frames` accepts one of these requests:
-
-| Request | Contract |
-| --- | --- |
-| `points` | 1–12 unique timestamps, each before the source duration. |
-| `burst` | A half-open interval and 2–12 ordered samples. |
-| `cadence` | A half-open interval and a positive integer `cadenceMs`. |
-
-Times are nonnegative integer milliseconds from the start of the source.
-Intervals require `startMs < endMs` and must fit within its duration. An exact
-frame request asks for the first decodable frame at or after the target; it
-does not guarantee a frame with precisely that presentation timestamp.
-
-For `points` and `burst`, the default presentation is `individual`. Set
-`presentation: "panel"` to receive one derived JPEG panel plus links to the
-canonical frame artifacts. A panel contains at most 12 cells and preserves
-request order.
-
-Cadence requests are paged. The default page maximum is 12 targets and the
-default schedule maximum is 120 targets. Continue with the returned opaque
-`nextCursor`; do not construct a cursor yourself. A cadence schedule is
-discrete evidence and does not cover the time between its targets.
+`get_overview` returns up to 12 sparse locator samples. `get_frames` supports
+explicit points, ordered bursts, and paged cadence schedules. The
+[Evidence Model](docs/EVIDENCE_MODEL.md) defines request bounds, panel output,
+pagination, and the limits of each result.
 
 ### Example tool arguments
 
@@ -265,32 +204,30 @@ than 5 seconds. Replace the example reference with the value from inspection:
 To continue a cadence page, pass `investigationRef` and the returned
 `nextCursor` as `cursor`, without a new `request`.
 
-## Resources and errors
+### Resources and errors
 
-Successful evidence results include investigation-scoped resource links. An
-artifact can be reopened through
-`urma://investigation/{investigationId}/artifact/{artifactHash}` only after
-that investigation has received it in a tool result. Reopening an artifact
-does not add temporal coverage.
+Successful evidence results include resource links for artifacts already
+presented to that investigation. Reopening an artifact does not add temporal
+coverage. The state resource exposes persisted acquisition and presentation
+state. See the [Evidence Model](docs/EVIDENCE_MODEL.md#resources-and-state) for
+resource templates and authorization rules.
 
-The state resource is
-`urma://investigation/{investigationId}/state`. It contains persisted
-acquisition, cache, and presentation state for that investigation.
+Top-level MCP failures return `isError: true` with a JSON text object
+containing `code`, `retryable`, and `detail`. A cadence page can report a failed
+slot while continuing with other targets.
 
-Top-level MCP failures return `isError: true` with a JSON text object containing
-`code`, `retryable`, and `detail`. A cadence page can instead return an error
-in an individual slot and continue with other targets.
-
-## Evidence rules
+### Evidence rules
 
 For caption search, `partial: false` means all matches under the selected
 track's matching rules were returned. It says nothing about uncaptioned
-speech or visual events. Sampled frames describe only the returned points,
-and reopening cached artifacts adds no coverage.
+speech or visual events. Sampled frames describe only the returned points; they
+do not establish coverage between them.
 
 See [Evidence Model](docs/EVIDENCE_MODEL.md) for the full contract.
 
-## Limits
+## Configuration and troubleshooting
+
+### Limits
 
 Runtime defaults are:
 
@@ -324,7 +261,7 @@ positive integer. `URMA_MAX_FRAME_SCHEDULE_PAGE_TARGETS` cannot exceed 12.
 | `URMA_MAX_FRAME_SCHEDULE_PAGE_TARGETS` | Cadence page limit. |
 | `URMA_MAX_FRAME_SCHEDULE_TARGETS` | Cadence schedule limit. |
 
-## Configuration
+### Configuration
 
 | Variable | Purpose |
 | --- | --- |
@@ -341,7 +278,7 @@ paths so root selection does not depend on the host's working directory.
 The packaged launcher uses the selected generation's absolute native-tool
 paths. It does not look up FFmpeg, ffprobe, or yt-dlp through `PATH`.
 
-## CLI and maintenance
+### CLI and maintenance
 
 The npm entry point exposes setup and version checks:
 
@@ -350,8 +287,12 @@ npx -y urma-mcp@rc --version
 npx -y urma-mcp@rc setup
 ```
 
-The `npx` version command reports the npm candidate's version. To check the
-installed generation, use the Node and launcher paths printed by setup:
+The `npx` version command reports the npm candidate's version, not the installed
+generation. To check the installed generation, use the Node and launcher paths
+printed by setup.
+
+Before using launcher `--version`, `doctor`, `rollback`, or `recover`, set
+`URMA_DATA_DIR` if setup used a custom data root.
 
 ```sh
 "/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" --version
@@ -374,9 +315,8 @@ versions, storage, blob access, local roots, and frame-schedule limits. It
 prints its report to stderr and exits with status 0 when no check fails
 (warnings are allowed), or 1 when a check fails.
 
-For both version checks and doctor, set `URMA_DATA_DIR` if setup used a custom
-data root. To diagnose host behavior, also use the host's `URMA_LOCAL_ROOTS`
-and other Urma settings. If setup did not complete, report its error instead.
+To diagnose host behavior, use the host's `URMA_LOCAL_ROOTS` and other Urma
+settings. If setup did not complete, report its error instead.
 
 The launcher also provides local generation recovery:
 
@@ -387,7 +327,7 @@ The launcher also provides local generation recovery:
 
 `rollback` selects the retained previous generation after integrity and state
 compatibility checks. `recover` restores the selection recorded in
-`ACTIVE.backup.json`. Set `URMA_DATA_DIR` for a non-default data root.
+`ACTIVE.backup.json`.
 
 Normal MCP startup selects one generation for the process. It does not invoke
 npm, make a network request, check for updates, modify `PATH`, or download
@@ -417,7 +357,9 @@ See [Security](docs/SECURITY.md) for the full boundary and failure behavior.
 
 ## Development
 
-Use Node.js 24 and the pnpm version declared in `package.json`. See the
+Use the Node.js 24.21.0 version pinned in `.node-version` and the pnpm version
+declared in `package.json` for development and publishing. The supported runtime
+versions are listed under [Requirements](#requirements). See the
 [development prerequisites](docs/CONTRIBUTING.md#development-setup) for native
 tools used by the tests. From the repository root:
 
@@ -428,6 +370,17 @@ pnpm check
 
 Contributions are welcome. Follow the [contribution guide](docs/CONTRIBUTING.md)
 for code structure, documentation standards, and pull request expectations.
+
+## RC testing
+
+External testers can report installation, MCP-host, or source/provider problems
+through the [RC bug-report template](https://github.com/sajidurdev/urma/issues/new?template=bug-report.md).
+Include reproduction steps, your OS/architecture, Node.js and host versions,
+the installed Urma version, and expected versus actual behavior. For a
+source-specific issue, include a public URL or a description of a reproducible
+local video. Add relevant [doctor output](#cli-and-maintenance) if setup
+completed; otherwise include the setup error. Remove credentials, private
+URLs, and personal paths before posting logs.
 
 ## License
 

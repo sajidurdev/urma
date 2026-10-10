@@ -234,12 +234,12 @@ export async function runGate(options = {}) {
   const summary = evaluateCompatibility(manifest, report);
   const lines = [gateText(summary)];
   if (releaseType === "test") {
-    lines.push("release_type=test: diagnostic only; publication is disabled for test runs.");
+    lines.push("release_type=test: validation only; publication is disabled for test runs.");
   }
   return {
     summary,
     output: `${lines.join("\n")}\n`,
-    shouldFail: summary.releaseCorrectness !== "PASS" && releaseType !== "test",
+    shouldFail: summary.releaseCorrectness !== "PASS",
     reportPath,
   };
 }

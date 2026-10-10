@@ -244,7 +244,7 @@ export function assertSubresourceTargetAllowed(
   return assertRemoteTargetAllowed({ url, purpose });
 }
 
-/** Keep proxy variables out of child environments */
+/** Reject inherited proxy variables; remote requests use the explicit Safe Proxy endpoint */
 export function assertNoProxyEnvironment(environment: NodeJS.ProcessEnv): void {
   const proxyNames = [
     "HTTP_PROXY",

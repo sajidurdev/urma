@@ -4,6 +4,7 @@ import { cp, mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { UrmaError } from "../core/errors.js";
+import { DEFAULT_SUPPORTED_NODE_RANGE } from "../version.js";
 import { sha256File } from "./integrity.js";
 
 type PackageJson = Readonly<{
@@ -154,7 +155,7 @@ export async function copyNpmRuntime(stageGenerationDir: string): Promise<Copied
     name: typeof packageJson.name === "string" ? packageJson.name : "urma-mcp",
     version: typeof packageJson.version === "string" ? packageJson.version : "0.0.0",
     type: "module",
-    engines: packageJson.engines ?? { node: ">=24 <25" },
+    engines: packageJson.engines ?? { node: DEFAULT_SUPPORTED_NODE_RANGE },
     dependencies: packageJson.dependencies ?? {},
   };
   delete (sanitized.dependencies as Record<string, string>).urma;

@@ -9,6 +9,7 @@ import { redactText } from "../subprocess/redaction.js";
 import { YtDlp } from "../subprocess/ytdlp.js";
 import { SCHEMA_VERSION } from "../store/schema.js";
 import { SUPPORTED_NODE_RANGE, URMA_VERSION } from "../version.js";
+import { nodeVersionIsSupported } from "../distribution/platform.js";
 
 export type DoctorStatus = "ok" | "warning" | "fail";
 type DoctorIssue = "missing" | "unsupported" | "failed" | "unusable";
@@ -71,14 +72,6 @@ function isMissing(error: unknown): boolean {
   );
 }
 
-function nodeVersionIsSupported(version: string): boolean {
-  const major = Number(version.split(".", 1)[0]);
-  const lower = Number(SUPPORTED_NODE_RANGE.match(/>=\s*(\d+)/u)?.[1] ?? 0);
-  const upperMatch = SUPPORTED_NODE_RANGE.match(/<\s*(\d+)/u);
-  const upper = upperMatch ? Number(upperMatch[1]) : Number.POSITIVE_INFINITY;
-  return Number.isSafeInteger(major) && major >= lower && major < upper;
-}
-
 type InstallPlatform =
   | "Windows"
   | "macOS"
@@ -113,13 +106,13 @@ async function installPlatform(): Promise<InstallPlatform> {
 }
 
 function guidance(title: string, platform: InstallPlatform): DoctorGuidance {
-  const docs = title === "Node.js 24+"
+  const docs = title === "Node.js"
     ? "https://nodejs.org/en/download/package-manager"
     : title === "FFmpeg"
     ? "https://ffmpeg.org/download.html"
     : "https://github.com/yt-dlp/yt-dlp#installation";
-  const setupCommand = title === "Node.js 24+"
-    ? "Install native Node.js 24 LTS, then rerun npx -y urma-mcp@latest setup"
+  const setupCommand = title === "Node.js"
+    ? `Install a supported native Node.js version (${SUPPORTED_NODE_RANGE}), then rerun npx -y urma-mcp@latest setup`
     : "npx -y urma-mcp@latest setup";
   const commands: Record<InstallPlatform, string> = {
     Windows: setupCommand,
@@ -479,7 +472,7 @@ export async function runDoctor(config: UrmaConfig): Promise<DoctorReport> {
   if (
     checks.some((item) => item.name === "Node" && item.issue === "unsupported")
   ) {
-    guidanceChecks.add("Node.js 24+");
+    guidanceChecks.add("Node.js");
   }
   return {
     ok: checks.every((item) => item.ok),

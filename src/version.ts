@@ -53,5 +53,7 @@ function loadPackageMetadata(): PackageMetadata {
 
 export const PACKAGE_METADATA = loadPackageMetadata();
 export const URMA_VERSION = PACKAGE_METADATA.version;
+export const DEFAULT_SUPPORTED_NODE_RANGE =
+  ">=22.16.0 <23 || >=24.0.0 <25 || >=26.0.0 <27";
 export const SUPPORTED_NODE_RANGE = PACKAGE_METADATA.engines?.node ??
-  "not declared";
+  DEFAULT_SUPPORTED_NODE_RANGE;

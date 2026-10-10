@@ -11,7 +11,7 @@ test("real identical local frames share one extraction and admit both sources", 
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "urma-frame-provenance-probe-"),
   );
-  const fixture = path.resolve("tests", "fixtures", "opaque-case-j.mp4");
+  const fixture = path.resolve("tests", "fixtures", "sample-video.mp4");
   const videoA = path.join(directory, "source-a.mp4");
   const videoB = path.join(directory, "source-b.mp4");
   await copyFile(fixture, videoA);
