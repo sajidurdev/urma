@@ -364,15 +364,9 @@ function classifyFailure(stage: string, error: ErrorInfo): FailureClass {
   return "INTERNAL_BUG";
 }
 
-type FailureResponsibility = "Urma" | "upstream" | "fixture" | "transport";
+type FailureResponsibility = "Urma" | "upstream" | "fixture";
 
-function isKnownTransportLimitation(failure: FailureClass, error: ErrorInfo): boolean {
-  if (failure !== "ACQUISITION_FAILED" || error.code !== "TARGETED_MEDIA_UNAVAILABLE") return false;
-  return /bounded section \[[^\]]+\) does not cover target \d+ ms|reusable evidence media does not provide validated timing coverage for target \d+ ms/iu.test(error.detail);
-}
-
-function responsibility(failure: FailureClass, error: ErrorInfo): FailureResponsibility {
-  if (isKnownTransportLimitation(failure, error)) return "transport";
+function responsibility(failure: FailureClass): FailureResponsibility {
   if ([
     "FIXTURE_GONE",
     "FIXTURE_NOT_SINGLE_VIDEO",
@@ -644,7 +638,7 @@ function addFailure(
     observedError: error.detail,
     code: error.code,
     retryable: error.retryable,
-    responsibility: responsibility(failure, error),
+    responsibility: responsibility(failure),
     blocking,
   };
   failures.push(item);

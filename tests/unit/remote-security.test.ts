@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  Server,
   createServer,
   request as httpRequest,
   type IncomingMessage,
@@ -203,7 +204,7 @@ test("Safe Proxy forwards HTTP to the exact validated public address", async (t)
   assert.equal(proxy.logs.at(-1)?.address, "93.184.216.34");
 });
 
-test("Safe Proxy stops HTTP acquisition when the client disconnects during DNS", async (t) => {
+test("Safe Proxy stops HTTP acquisition when the client disconnects during DNS", { timeout: 10_000 }, async (t) => {
   let beginLookup!: () => void;
   let releaseLookup!: () => void;
   const lookupStarted = new Promise<void>((resolve) => {
@@ -212,6 +213,30 @@ test("Safe Proxy stops HTTP acquisition when the client disconnects during DNS",
   const lookupGate = new Promise<void>((resolve) => {
     releaseLookup = resolve;
   });
+  let proxyResponseClosed!: () => void;
+  const proxyResponseClosedPromise = new Promise<void>((resolve) => {
+    proxyResponseClosed = resolve;
+  });
+  const originalEmit = Server.prototype.emit;
+  t.mock.method(
+    Server.prototype,
+    "emit",
+    function (
+      this: Server,
+      event: string | symbol,
+      ...args: unknown[]
+    ): boolean {
+      if (event === "request") {
+        const request = args[0] as IncomingMessage | undefined;
+        const response = args[1] as ServerResponse | undefined;
+        if (
+          request?.url === "http://cancel.example.test/video.mp4" &&
+          response
+        ) response.once("close", proxyResponseClosed);
+      }
+      return Reflect.apply(originalEmit, this, [event, ...args]) as boolean;
+    },
+  );
   let backendRequests = 0;
   let backendRequestArrived!: () => void;
   const backendRequest = new Promise<void>((resolve) => {
@@ -243,14 +268,14 @@ test("Safe Proxy stops HTTP acquisition when the client disconnects during DNS",
     headers: { host: "cancel.example.test" },
   }, () => {});
   downstream.on("error", () => {});
-  downstream.end();
-  await lookupStarted;
   const closed = new Promise<void>((resolve) => {
     downstream.once("close", resolve);
   });
+  downstream.end();
+  await lookupStarted;
   downstream.destroy();
   await closed;
-  await new Promise((resolve) => setImmediate(resolve));
+  await proxyResponseClosedPromise;
   releaseLookup();
   await Promise.race([
     backendRequest,

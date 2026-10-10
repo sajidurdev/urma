@@ -127,7 +127,9 @@ function resultReason(result) {
 
 function regressionEvidence(results) {
   return results.flatMap((result) => resultFailures(result)
-    .filter((failure) => failure.responsibility === "Urma" && isBlocking(failure))
+    .filter((failure) => failure.responsibility !== "upstream"
+      && failure.responsibility !== "fixture"
+      && isBlocking(failure))
     .map((failure) => `${provider(result, "compatibility result")}: ${text(failure.class) ?? "failure"} — ${text(failure.observedError) ?? "no detail"}`));
 }
 

@@ -1,6 +1,6 @@
 import { putTestSource } from "../support/source-fixture.js";
 import assert from "node:assert/strict";
-import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -299,6 +299,7 @@ async function makeOffsetSection(
 
 async function makeAudioVideoWithDelayedVideo(
   ctx: Awaited<ReturnType<typeof fixture>>,
+  omitSampleAspectRatio = false,
 ): Promise<string> {
   const zeroOriginVideo = path.join(ctx.directory, "zero-origin-video.mp4");
   const output = path.join(ctx.directory, "audio-zero-video-55ms.mp4");
@@ -311,6 +312,7 @@ async function makeAudioVideoWithDelayedVideo(
       "lavfi",
       "-i",
       "testsrc=size=160x90:rate=10:duration=2",
+      ...(omitSampleAspectRatio ? ["-vf", "setsar=0"] : []),
       "-c:v",
       "libx264",
       "-g",
@@ -359,6 +361,201 @@ async function makeAudioVideoWithDelayedVideo(
     { timeoutMs: 30_000 },
   );
   return output;
+}
+
+async function makeHlsPrefix(
+  ctx: Awaited<ReturnType<typeof fixture>>,
+  input: string,
+): Promise<{ playlist: string; segment: string }> {
+  const directory = path.join(ctx.directory, "hls-prefix");
+  await mkdir(directory, { recursive: true });
+  const playlist = path.join(directory, "index.m3u8");
+  const segment = path.join(directory, "segment0.ts");
+  await runChecked(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-i",
+      input,
+      "-map",
+      "0:v:0",
+      "-map",
+      "0:a:0",
+      "-c",
+      "copy",
+      "-f",
+      "mpegts",
+      "-y",
+      segment,
+    ],
+    { timeoutMs: 30_000 },
+  );
+  await writeFile(
+    playlist,
+    "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-TWITCH-ELAPSED-SECS:0.000\n#EXT-X-TWITCH-TOTAL-SECS:11496.201\n#EXTINF:2.055,\nsegment0.ts\n#EXT-X-ENDLIST\n",
+    "utf8",
+  );
+  return { playlist, segment };
+}
+
+async function makeCutAudioVideo(
+  ctx: Awaited<ReturnType<typeof fixture>>,
+  input: string,
+): Promise<string> {
+  const cutVideo = path.join(ctx.directory, "cut-video-only.mp4");
+  const cutMp4 = path.join(ctx.directory, "cut-audio-zero-video-later.mp4");
+  const output = path.join(ctx.directory, "cut-audio-zero-video-later.ts");
+  await runChecked(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-ss",
+      "0.2",
+      "-i",
+      input,
+      "-t",
+      "1.8",
+      "-map",
+      "0:v:0",
+      "-an",
+      "-c:v",
+      "libx264",
+      "-g",
+      "1",
+      "-bf",
+      "0",
+      "-pix_fmt",
+      "yuv420p",
+      "-video_track_timescale",
+      "90000",
+      "-avoid_negative_ts",
+      "disabled",
+      "-y",
+      cutVideo,
+    ],
+    { timeoutMs: 30_000 },
+  );
+  await runChecked(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-itsoffset",
+      "0.055",
+      "-i",
+      cutVideo,
+      "-f",
+      "lavfi",
+      "-i",
+      "anullsrc=channel_layout=stereo:sample_rate=48000",
+      "-map",
+      "0:v:0",
+      "-map",
+      "1:a:0",
+      "-t",
+      "1.855",
+      "-c:v",
+      "copy",
+      "-c:a",
+      "aac",
+      "-avoid_negative_ts",
+      "disabled",
+      "-video_track_timescale",
+      "90000",
+      "-y",
+      cutMp4,
+    ],
+    { timeoutMs: 30_000 },
+  );
+  await runChecked(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-i",
+      cutMp4,
+      "-map",
+      "0:v:0",
+      "-map",
+      "0:a:0",
+      "-c",
+      "copy",
+      "-muxdelay",
+      "0",
+      "-muxpreload",
+      "0",
+      "-f",
+      "mpegts",
+      "-y",
+      output,
+    ],
+    { timeoutMs: 30_000 },
+  );
+  return output;
+}
+
+async function makeSampleAspectRatioVariant(
+  ctx: Awaited<ReturnType<typeof fixture>>,
+  input: string,
+): Promise<string> {
+  const output = path.join(ctx.directory, "different-sar-same-pixels.ts");
+  await runChecked(
+    ctx.config.ffmpeg,
+    [
+      "-v",
+      "error",
+      "-i",
+      input,
+      "-map",
+      "0:v:0",
+      "-map",
+      "0:a:0?",
+      "-c",
+      "copy",
+      "-bsf:v",
+      "h264_metadata=sample_aspect_ratio=2/1",
+      "-f",
+      "mpegts",
+      "-y",
+      output,
+    ],
+    { timeoutMs: 30_000 },
+  );
+  return output;
+}
+
+async function firstFrameRgbHash(
+  ctx: Awaited<ReturnType<typeof fixture>>,
+  file: string,
+): Promise<string> {
+  const result = await runChecked(
+    ctx.config.ffmpeg,
+    [
+      "-v",
+      "error",
+      "-i",
+      file,
+      "-map",
+      "0:v:0",
+      "-frames:v",
+      "1",
+      "-vf",
+      "format=rgb24",
+      "-f",
+      "hash",
+      "-hash",
+      "sha256",
+      "pipe:1",
+    ],
+    { timeoutMs: 30_000, maxStdoutBytes: 1024 },
+  );
+  const match = /^SHA256=([a-f0-9]{64})\s*$/imu.exec(
+    result.stdout.toString("utf8"),
+  );
+  assert(match, "ffmpeg did not emit one RGB24 frame SHA-256");
+  return match[1]!;
 }
 
 async function makeZeroStreamSection(
@@ -484,6 +681,7 @@ async function storedTransport(
     producer?: Readonly<Record<string, unknown>>;
     createdAt?: string;
   },
+  requestKey?: string,
 ): Promise<StoredArtifact> {
   const blob = await ctx.blobs.putFile(file);
   const artifact: StoredArtifact = {
@@ -512,7 +710,12 @@ async function storedTransport(
     },
     createdAt: values.createdAt ?? new Date().toISOString(),
   };
-  ctx.store.putArtifact(artifact);
+  ctx.store.putArtifact(
+    artifact,
+    requestKey === undefined
+      ? undefined
+      : { requestKey, operation: "media-section" },
+  );
   return artifact;
 }
 
@@ -1372,50 +1575,489 @@ test("cached bounded media skips an inconsistent container origin for a valid ca
   }
 });
 
-test("Twitch-shaped source-start coverage miss is a target failure with no reusable escalation", async (t) => {
-  const ctx = await fixture(t);
-  const bounded = await makeAudioVideoWithDelayedVideo(ctx);
-  const probe = await new Ffprobe(ctx.config).inspect(bounded);
+function sourcePrefixDownloader(
+  ctx: Awaited<ReturnType<typeof fixture>>,
+  bounded: string,
+  prefix: { playlist: string; segment: string },
+  behavior: Readonly<{
+    manifestFailures?: number;
+    blockManifest?: boolean;
+    manifestText?: string;
+  }> = {},
+) {
+  const calls: string[][] = [];
+  const runTimeouts: number[] = [];
+  const manifestTimeouts: number[] = [];
+  let manifestCalls = 0;
+  let remainingManifestFailures = behavior.manifestFailures ?? 0;
+  let announceManifestStarted!: () => void;
+  const manifestStarted = new Promise<void>((resolve) => {
+    announceManifestStarted = resolve;
+  });
+  const deliveryUrl = "https://fixture.invalid/hls/index.m3u8";
+  let manifestTextOverride = behavior.manifestText;
+  const candidateKey = candidateKeyForSourceFormat(
+    ctx.resolved,
+    ctx.resolved.formats[0]!,
+  );
+  const downloader = {
+    lease: async (
+      selectedSource: ResolvedSource,
+      format: ResolvedSource["formats"][number],
+    ) => ({
+      snapshotRef: selectedSource.snapshotRef,
+      candidateKey,
+      sourceRef: selectedSource.sourceRef,
+      formatId: format.id,
+      deliveryUrl,
+      expiresAtMs: Date.now() + 60_000,
+    }),
+    manifestText: async (
+      url: string,
+      signal?: AbortSignal,
+      options?: Readonly<{ timeoutMs?: number }>,
+    ) => {
+      manifestCalls += 1;
+      assert.equal(url, deliveryUrl);
+      assert(options?.timeoutMs === undefined || options.timeoutMs > 0);
+      manifestTimeouts.push(options?.timeoutMs ?? 0);
+      announceManifestStarted();
+      if (remainingManifestFailures > 0) {
+        remainingManifestFailures -= 1;
+        throw new UrmaError("SOURCE_UNAVAILABLE", "fixture manifest failure");
+      }
+      if (behavior.blockManifest) {
+        await new Promise<never>((_resolve, reject) => {
+          const abort = () => {
+            signal?.removeEventListener("abort", abort);
+            reject(new UrmaError("CANCELLED", "fixture manifest cancelled"));
+          };
+          if (signal?.aborted) abort();
+          else signal?.addEventListener("abort", abort, { once: true });
+        });
+      }
+      return manifestTextOverride ?? await readFile(prefix.playlist, "utf8");
+    },
+    run: async (
+      args: readonly string[],
+      runOptions?: Readonly<{ signal?: AbortSignal; timeoutMs?: number }>,
+    ) => {
+      calls.push([...args]);
+      runTimeouts.push(runOptions?.timeoutMs ?? 0);
+      if (args.includes("--download-sections")) {
+        const outputDirectory = String(args[args.indexOf("--paths") + 1]);
+        const extension = path.extname(bounded) || ".bin";
+        await copyFile(bounded, path.join(outputDirectory, `media${extension}`));
+        return processResult(args);
+      }
+      const url = String(args.at(-1));
+      assert.equal(url, new URL("segment0.ts", deliveryUrl).href);
+      const output = String(args[args.indexOf("-o") + 1]);
+      await copyFile(prefix.segment, output);
+      return processResult(args);
+    },
+  };
+  return {
+    calls,
+    runTimeouts,
+    manifestTimeouts,
+    get manifestCalls() { return manifestCalls; },
+    setManifestText(text: string) { manifestTextOverride = text; },
+    manifestStarted,
+    deliveryUrl,
+    candidateKey,
+    downloader,
+  };
+}
+
+async function coverageDelayMs(
+  ctx: Awaited<ReturnType<typeof fixture>>,
+  file: string,
+): Promise<number> {
+  const probe = await new Ffprobe(ctx.config).inspect(file);
   const streams = probe.streams as Array<Record<string, unknown>>;
-  assert.equal((probe.format as Record<string, unknown>).start_time, "0.000000");
-  assert.equal(
-    streams.find((stream) => stream.codec_type === "audio")?.start_time,
-    "0.000000",
+  const video = streams.find((stream) => stream.codec_type === "video");
+  const format = probe.format as Record<string, unknown>;
+  assert(video);
+  const coverage = parseVideoStreamCoverage(video, format.start_time);
+  assert(coverage);
+  return (coverage.startSeconds - coverage.containerStartSeconds) * 1_000;
+}
+
+test("a zero-start HLS section may use its first frame after native source identity and timing match", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx);
+  const prefix = await makeHlsPrefix(ctx, delayed);
+  const playlist = await readFile(prefix.playlist, "utf8");
+  assert(playlist.includes("#EXT-X-MEDIA-SEQUENCE:0"));
+  assert(playlist.includes("#EXT-X-ENDLIST"));
+  assert(!playlist.includes("#EXT-X-START"));
+  const sourceHash = await firstFrameRgbHash(ctx, prefix.segment);
+  assert.equal(sourceHash, await firstFrameRgbHash(ctx, delayed));
+  const sourceDelayMs = await coverageDelayMs(ctx, prefix.segment);
+  assert(sourceDelayMs > 1);
+
+  const bounded = prefix.segment;
+  const legacyKey = deterministicRequestKey(
+    ctx.resolved.revision,
+    "media-section",
+    {
+      startMs: 0,
+      endMs: 2_001,
+      candidateKey: candidateKeyForSourceFormat(
+        ctx.resolved,
+        ctx.resolved.formats[0]!,
+      ),
+      formatId: "hls",
+      fidelity: "evidence",
+      requestedStartMs: 0,
+      requestedEndMs: 2_001,
+    },
+    "bounded-section",
   );
-  assert.equal(
-    streams.find((stream) => stream.codec_type === "video")?.start_time,
-    "0.055000",
-  );
-  const transport = copyingDownloader(ctx, bounded);
-  const outcomes = await new FrameAcquirer(
+  const legacy = await storedTransport(ctx, bounded, {
+    startMs: 0,
+    endMs: 2_001,
+    version: "bounded-section",
+  }, legacyKey);
+  assert.equal(legacy.producer.validatedSourceFirstFrame, undefined);
+
+  const transport = sourcePrefixDownloader(ctx, bounded, prefix);
+  const acquirer = new FrameAcquirer(
     ctx.config,
     ctx.store,
     ctx.blobs,
     new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, transport.downloader),
-  ).getOutcomes(ctx.resolved, ctx.ref, [0]);
-
-  const outcome = outcomes[0]!;
-  assert.equal(outcome.status, "error");
-  if (outcome.status !== "error") throw new Error("target unexpectedly succeeded");
-  assert(outcome.error instanceof UrmaError);
-  assert.equal(outcome.error.code, "TARGETED_MEDIA_UNAVAILABLE");
-  assert.equal(outcome.error.detail.reason, "bounded-coverage-miss");
-  assert.deepEqual(
-    transport.calls.map((args) => rangeArguments(args).length),
-    [1],
   );
+  const outcomes = await acquirer.getOutcomes(ctx.resolved, ctx.ref, [0]);
+
+  assert.equal(
+    outcomes[0]?.status,
+    "success",
+    outcomes[0]?.status === "error"
+      ? `target-zero failure: ${outcomes[0].error instanceof Error ? outcomes[0].error.message : String(outcomes[0].error)}`
+      : undefined,
+  );
+  const section = ctx.store
+    .listArtifacts(ctx.resolved.sourceRef, ctx.resolved.revision)
+    .find((artifact) => artifact.kind === "media_section" &&
+      artifact.producer.validatedSourceFirstFrame !== undefined);
+  assert(section);
+  const proof = section.producer.validatedSourceFirstFrame as Record<string, unknown>;
+  assert.equal(proof.version, 1);
+  assert.equal(proof.candidateKey, transport.candidateKey);
+  assert.equal(proof.frameSha256, sourceHash);
+  assert(Math.abs(Number(proof.sourceVideoDelayMs) - sourceDelayMs) <= 1);
+  assert(Math.abs(Number(proof.sectionVideoDelayMs) - sourceDelayMs) <= 1);
+  assert.equal(transport.calls.filter((args) => args.includes("--download-sections")).length, 1);
+  assert.equal(transport.calls.length, 2);
+  assert.equal(transport.runTimeouts.length, 2);
+  assert(transport.runTimeouts[0]! > transport.runTimeouts[1]!);
+  assert(transport.manifestTimeouts[0]! < transport.runTimeouts[0]!);
+  const repeated = await acquirer.getOutcomes(ctx.resolved, ctx.ref, [0]);
+  assert.equal(repeated[0]?.status, "success");
+  assert.equal(transport.calls.length, 2);
+});
+
+test("matching native streams with unspecified SAR can verify the zero-start frame", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx, true);
+  const prefix = await makeHlsPrefix(ctx, delayed);
+  const bounded = prefix.segment;
+  const sourceProbe = await new Ffprobe(ctx.config).inspect(prefix.segment);
+  const sectionProbe = await new Ffprobe(ctx.config).inspect(bounded);
+  const sourceVideo = (sourceProbe.streams as Array<Record<string, unknown>>)
+    .find((stream) => stream.codec_type === "video");
+  const sectionVideo = (sectionProbe.streams as Array<Record<string, unknown>>)
+    .find((stream) => stream.codec_type === "video");
+  assert(sourceVideo);
+  assert(sectionVideo);
+  assert.equal(sourceVideo.sample_aspect_ratio, undefined);
+  assert.equal(sectionVideo.sample_aspect_ratio, undefined);
+  assert((await coverageDelayMs(ctx, prefix.segment)) > 1);
+
+  const transport = sourcePrefixDownloader(ctx, bounded, prefix);
+  const acquirer = new FrameAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, transport.downloader),
+  );
+  const first = (await acquirer.getOutcomes(ctx.resolved, ctx.ref, [0]))[0]!;
+  assert.equal(first.status, "success");
+  if (first.status === "success") assert.equal(first.cacheHit, false);
+  const section = ctx.store
+    .listArtifacts(ctx.resolved.sourceRef, ctx.resolved.revision)
+    .find((artifact) => artifact.kind === "media_section" &&
+      artifact.producer.validatedSourceFirstFrame !== undefined);
+  assert(section);
+  assert.ok(section.producer.validatedSourceFirstFrame);
+
+  const repeated = (await acquirer.getOutcomes(ctx.resolved, ctx.ref, [0]))[0]!;
+  assert.equal(repeated.status, "success");
+  if (repeated.status === "success") assert.equal(repeated.cacheHit, true);
+  assert.equal(transport.calls.length, 2);
+});
+
+test("Twitch elapsed metadata must prove an exact zero origin before source-frame verification", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx);
+  const prefix = await makeHlsPrefix(ctx, delayed);
+  const validPlaylist = await readFile(prefix.playlist, "utf8");
+  const invalidPlaylists = [
+    ["nonzero elapsed", validPlaylist.replace(
+      "#EXT-X-TWITCH-ELAPSED-SECS:0.000",
+      "#EXT-X-TWITCH-ELAPSED-SECS:1.000",
+    )],
+    ["negative elapsed", validPlaylist.replace(
+      "#EXT-X-TWITCH-ELAPSED-SECS:0.000",
+      "#EXT-X-TWITCH-ELAPSED-SECS:-0.000",
+    )],
+    ["malformed elapsed", validPlaylist.replace(
+      "#EXT-X-TWITCH-ELAPSED-SECS:0.000",
+      "#EXT-X-TWITCH-ELAPSED-SECS:1e3",
+    )],
+    ["zero total duration", validPlaylist.replace(
+      "#EXT-X-TWITCH-TOTAL-SECS:11496.201",
+      "#EXT-X-TWITCH-TOTAL-SECS:0",
+    )],
+  ] as const;
+  const transport = sourcePrefixDownloader(ctx, prefix.segment, prefix);
+  const acquirer = new FrameAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, transport.downloader),
+  );
+
+  for (const [label, playlist] of invalidPlaylists) {
+    assert.notEqual(playlist, validPlaylist, `${label} fixture did not change`);
+    transport.setManifestText(playlist);
+    const outcome = (await acquirer.getOutcomes(ctx.resolved, ctx.ref, [0]))[0]!;
+    assert.equal(outcome.status, "error", `${label} should not authorize target zero`);
+    if (outcome.status === "error") {
+      assert(outcome.error instanceof UrmaError);
+      assert.equal(outcome.error.code, "TARGETED_MEDIA_UNAVAILABLE");
+      assert.equal(outcome.error.detail.reason, "bounded-coverage-miss");
+    }
+  }
+
   const section = ctx.store
     .listArtifacts(ctx.resolved.sourceRef, ctx.resolved.revision)
     .find((artifact) => artifact.kind === "media_section");
   assert(section);
-  assert(Math.abs(Number(section.producer.validatedVideoStart) * 1_000 - 55) <= 2);
-  assert.equal(section.producer.validatedSourcePrefix, undefined);
-  const artifacts = ctx.store.listArtifacts(
-    ctx.resolved.sourceRef,
-    ctx.resolved.revision,
+  assert.equal(section.producer.validatedSourceFirstFrame, undefined);
+  assert.equal(
+    ctx.store.listArtifacts(ctx.resolved.sourceRef, ctx.resolved.revision)
+      .filter((artifact) => artifact.kind === "frame").length,
+    0,
   );
-  assert.equal(artifacts.filter((artifact) => artifact.kind === "evidence_media").length, 0);
-  assert.equal(artifacts.filter((artifact) => artifact.kind === "frame").length, 0);
+  assert.equal(transport.calls.filter((args) => args.includes("--download-sections")).length, 1);
+  assert.equal(transport.calls.length, 1, "invalid origin metadata must not fetch a source segment");
+  assert.equal(transport.manifestCalls, invalidPlaylists.length);
+});
+
+test("a later request can verify a cached zero-start section without downloading that section again", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx);
+  const prefix = await makeHlsPrefix(ctx, delayed);
+  const transport = sourcePrefixDownloader(ctx, prefix.segment, prefix, {
+    manifestFailures: 1,
+  });
+  const media = new MediaAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    transport.downloader,
+  );
+  const acquirer = new FrameAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    media,
+  );
+
+  const first = await acquirer.getOutcomes(ctx.resolved, ctx.ref, [0]);
+  assert.equal(first[0]?.status, "error");
+  assert.equal(transport.manifestCalls, 1);
+  assert.equal(
+    transport.calls.filter((args) => args.includes("--download-sections")).length,
+    1,
+  );
+  assert.equal(transport.calls.length, 1);
+
+  const second = await media.section(ctx.resolved, ctx.ref, 0, 2_001);
+  assert.equal(second.cacheHit, true);
+  assert.ok(second.artifact.producer.validatedSourceFirstFrame);
+  assert.equal(transport.manifestCalls, 2);
+  assert.equal(
+    transport.calls.filter((args) => args.includes("--download-sections")).length,
+    1,
+  );
+  assert.equal(transport.calls.length, 2);
+
+  const third = await acquirer.getOutcomes(ctx.resolved, ctx.ref, [0]);
+  assert.equal(third[0]?.status, "success");
+  if (third[0]?.status === "success") assert.equal(third[0].cacheHit, false);
+  const fourth = await acquirer.getOutcomes(ctx.resolved, ctx.ref, [0]);
+  assert.equal(fourth[0]?.status, "success");
+  if (fourth[0]?.status === "success") assert.equal(fourth[0].cacheHit, true);
+  assert.equal(transport.manifestCalls, 2);
+  assert.equal(transport.calls.length, 2);
+});
+
+test("source-start verification shares cancellation with the section acquisition", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx);
+  const prefix = await makeHlsPrefix(ctx, delayed);
+  const transport = sourcePrefixDownloader(ctx, prefix.segment, prefix, {
+    blockManifest: true,
+  });
+  const media = new MediaAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    transport.downloader,
+  );
+  const controller = new AbortController();
+  const pending = media.section(ctx.resolved, ctx.ref, 0, 2_001, controller.signal);
+  await transport.manifestStarted;
+  controller.abort();
+
+  await assert.rejects(
+    pending,
+    (error: unknown) => error instanceof UrmaError && error.code === "CANCELLED",
+  );
+  assert.equal(transport.manifestCalls, 1);
+  assert.equal(transport.calls.length, 1);
+  assert.equal(
+    transport.calls.filter((args) => args.includes("--download-sections")).length,
+    1,
+  );
+});
+
+test("combined bounded-section and source-segment bytes stay within the acquisition cap", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx);
+  const prefix = await makeHlsPrefix(ctx, delayed);
+  const fileBytes = (await readFile(prefix.segment)).byteLength;
+  const constrainedConfig = {
+    ...ctx.config,
+    limits: {
+      ...ctx.config.limits,
+      maxTargetedMediaBytes: fileBytes + 1,
+    },
+  };
+  const transport = sourcePrefixDownloader(ctx, prefix.segment, prefix);
+  const outcome = (await new FrameAcquirer(
+    constrainedConfig,
+    ctx.store,
+    ctx.blobs,
+    new MediaAcquirer(
+      constrainedConfig,
+      ctx.store,
+      ctx.blobs,
+      transport.downloader,
+    ),
+  ).getOutcomes(ctx.resolved, ctx.ref, [0]))[0]!;
+
+  assert.equal(outcome.status, "error");
+  if (outcome.status === "error") {
+    assert(outcome.error instanceof UrmaError);
+    assert.equal(outcome.error.code, "MEDIA_BUDGET_EXCEEDED");
+  }
+  assert.equal(transport.calls.length, 2);
+  assert.equal(
+    ctx.store.listArtifacts(ctx.resolved.sourceRef, ctx.resolved.revision)
+      .filter((artifact) => artifact.kind === "frame").length,
+    0,
+  );
+});
+
+test("a timed-out bounded batch does not restart its deadline in single-section fallback", async (t) => {
+  const ctx = await fixture(t);
+  let invocations = 0;
+  const media = new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, {
+    run: async () => {
+      invocations += 1;
+      throw new UrmaError(
+        "MEDIA_ACQUISITION_TIMEOUT",
+        "fixture batch deadline expired",
+      );
+    },
+  });
+  const outcomes = await media.sections([
+    {
+      source: ctx.resolved,
+      investigationRef: ctx.ref,
+      startMs: 0,
+      endMs: 2_001,
+    },
+    {
+      source: ctx.resolved,
+      investigationRef: ctx.ref,
+      startMs: 0,
+      endMs: 4_001,
+    },
+  ]);
+
+  assert.equal(invocations, 1);
+  assert.equal(outcomes.length, 2);
+  for (const outcome of outcomes) {
+    assert.equal(outcome.status, "rejected");
+    if (outcome.status === "rejected") {
+      assert(outcome.reason instanceof UrmaError);
+      assert.equal(outcome.reason.code, "MEDIA_ACQUISITION_TIMEOUT");
+    }
+  }
+});
+
+test("a sequence-zero HLS cut with a different first frame cannot use the zero-start exception", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx);
+  const prefix = await makeHlsPrefix(ctx, delayed);
+  const cut = await makeCutAudioVideo(ctx, delayed);
+  const sourceDelayMs = await coverageDelayMs(ctx, prefix.segment);
+  const cutDelayMs = await coverageDelayMs(ctx, cut);
+  assert(
+    Math.abs(cutDelayMs - sourceDelayMs) <= 1,
+    `source delay ${sourceDelayMs}ms did not match cut delay ${cutDelayMs}ms`,
+  );
+  assert.notEqual(
+    await firstFrameRgbHash(ctx, prefix.segment),
+    await firstFrameRgbHash(ctx, cut),
+  );
+  const playlist = await readFile(prefix.playlist, "utf8");
+  assert(playlist.includes("#EXT-X-MEDIA-SEQUENCE:0"));
+
+  const transport = sourcePrefixDownloader(ctx, cut, prefix);
+  const outcome = (await new FrameAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, transport.downloader),
+  ).getOutcomes(ctx.resolved, ctx.ref, [0]))[0]!;
+
+  assert.equal(outcome.status, "error");
+  if (outcome.status === "error") {
+    assert(outcome.error instanceof UrmaError);
+    assert.equal(
+      outcome.error.code,
+      "TARGETED_MEDIA_UNAVAILABLE",
+      `${outcome.error.message}; cause: ${String(outcome.error.cause)}`,
+    );
+    assert.equal(outcome.error.detail.reason, "bounded-coverage-miss");
+  }
+  const section = ctx.store
+    .listArtifacts(ctx.resolved.sourceRef, ctx.resolved.revision)
+    .find((artifact) => artifact.kind === "media_section");
+  assert(section);
+  assert.equal(section.producer.validatedSourceFirstFrame, undefined);
+  assert.equal(
+    ctx.store.listArtifacts(ctx.resolved.sourceRef, ctx.resolved.revision)
+      .filter((artifact) => artifact.kind === "frame").length,
+    0,
+  );
   assert.deepEqual(ctx.store.listPresentations(ctx.ref), []);
 });
 
@@ -1460,6 +2102,51 @@ test("bounded acquisition timeout and integrity failures stay target failures", 
     ctx.store
       .listArtifacts(ctx.resolved.sourceRef, ctx.resolved.revision)
       .filter((artifact) => artifact.kind === "evidence_media").length,
+    0,
+  );
+});
+
+test("a matching first RGB frame with different sample geometry cannot use the zero-start exception", async (t) => {
+  const ctx = await fixture(t);
+  const delayed = await makeAudioVideoWithDelayedVideo(ctx, true);
+  const prefix = await makeHlsPrefix(ctx, delayed);
+  const altered = await makeSampleAspectRatioVariant(ctx, prefix.segment);
+  assert.equal(await firstFrameRgbHash(ctx, prefix.segment), await firstFrameRgbHash(ctx, altered));
+  assert(Math.abs(await coverageDelayMs(ctx, prefix.segment) - await coverageDelayMs(ctx, altered)) <= 1);
+  const sourceProbe = await new Ffprobe(ctx.config).inspect(prefix.segment);
+  const alteredProbe = await new Ffprobe(ctx.config).inspect(altered);
+  const sourceVideo = (sourceProbe.streams as Array<Record<string, unknown>>)
+    .find((stream) => stream.codec_type === "video");
+  const alteredVideo = (alteredProbe.streams as Array<Record<string, unknown>>)
+    .find((stream) => stream.codec_type === "video");
+  assert(sourceVideo);
+  assert(alteredVideo);
+  assert.equal(sourceVideo.sample_aspect_ratio, undefined);
+  assert.equal(alteredVideo.sample_aspect_ratio, "2:1");
+  assert.notEqual(sourceVideo.sample_aspect_ratio, alteredVideo.sample_aspect_ratio);
+
+  const transport = sourcePrefixDownloader(ctx, altered, prefix);
+  const outcome = (await new FrameAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, transport.downloader),
+  ).getOutcomes(ctx.resolved, ctx.ref, [0]))[0]!;
+
+  assert.equal(outcome.status, "error");
+  if (outcome.status === "error") {
+    assert(outcome.error instanceof UrmaError);
+    assert.equal(outcome.error.code, "TARGETED_MEDIA_UNAVAILABLE");
+    assert.equal(outcome.error.detail.reason, "bounded-coverage-miss");
+  }
+  const section = ctx.store
+    .listArtifacts(ctx.resolved.sourceRef, ctx.resolved.revision)
+    .find((artifact) => artifact.kind === "media_section");
+  assert(section);
+  assert.equal(section.producer.validatedSourceFirstFrame, undefined);
+  assert.equal(
+    ctx.store.listArtifacts(ctx.resolved.sourceRef, ctx.resolved.revision)
+      .filter((artifact) => artifact.kind === "frame").length,
     0,
   );
 });
