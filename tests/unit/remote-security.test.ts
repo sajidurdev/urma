@@ -19,7 +19,7 @@ import {
 import {
   isRemoteOperationContext,
   requireRemoteOperationContext,
-} from "../../src/remote/worker.js";
+} from "../../src/remote/operation-context.js";
 
 type HttpResponse = Readonly<{
   status: number;

@@ -12,18 +12,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
-    # Ruleset 23609472 references this exact check name. Keep it stable.
-    name: CI / validate
+  runtime:
+    name: Test ${{ matrix.node.label }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          - version: "22.16.0"
+            label: Node.js 22.16.0 minimum
+          - version: "22"
+            label: Latest maintained Node.js 22
+          - version: "24"
+            label: Latest maintained Node.js 24
+          - version: "26"
+            label: Latest current Node.js 26
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
-          node-version-file: .node-version
+          node-version: ${{ matrix.node.version }}
+          check-latest: true
           package-manager-cache: false
       - name: Install media test dependencies
         run: |
@@ -32,7 +44,8 @@ jobs:
           node scripts/prepare-ci-tools.mjs
       - name: Install locked dependencies
         run: |
-          corepack enable
+          PNPM_SPEC="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; const spec = JSON.parse(readFileSync("package.json", "utf8")).packageManager; if (typeof spec !== "string" || !/^pnpm@\d+\.\d+\.\d+$/u.test(spec)) throw new Error("package.json must pin pnpm with an exact version"); process.stdout.write(spec);')"
+          npm install --global "$PNPM_SPEC"
           pnpm install --frozen-lockfile
       - name: Build
         run: pnpm build
@@ -46,3 +59,16 @@ jobs:
         run: node scripts/validate-metadata.mjs
       - name: CI and release validation tests
         run: node --test scripts/tests/*.test.mjs
+
+  validate:
+    # Ruleset 23609472 references this exact check name. Keep it stable.
+    name: CI / validate
+    if: ${{ always() }}
+    needs: runtime
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every Node runtime lane to pass
+        if: ${{ needs.runtime.result != 'success' }}
+        run: exit 1
+      - name: Confirm all Node runtime lanes passed
+        run: echo "All supported Node.js runtime lanes passed."

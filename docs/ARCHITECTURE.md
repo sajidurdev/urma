@@ -4,9 +4,6 @@
   <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/docs/assets/architecture.png" alt="Urma architecture" width="100%" />
 </p>
 
-The MCP server routes requests to `EvidenceService`, which resolves sources,
-acquires bounded captions or media, validates results, and records provenance.
-
 ## Runtime shape
 
 ```text
@@ -24,21 +21,31 @@ launcher-v1.mjs ──> selected immutable generation
 Evidence acquisition ──> Safe Proxy / generation-local yt-dlp, ffprobe, ffmpeg
 ```
 
-The MCP server validates inputs and service results with the schemas in
-`src/mcp/schemas.ts`. It then sends a compact projection through MCP. The
-projection keeps identities, timestamps, completeness, pagination, provenance,
-and resource references. Internal state summaries and transport details do not
-form part of the public projection.
-
 The server exposes five tools and two resource templates. `stdio.ts` owns the
 MCP transport and shuts down the application on input close or process
-termination. Protocol messages use stdout. Opt-in diagnostics use stderr and,
-when configured, a JSONL file.
+termination. Protocol messages go to stdout. Opt-in diagnostics go to stderr
+and, when configured, a JSONL file.
+
+## MCP request flow
+
+1. Tool input and output schemas are defined in `src/mcp/schemas.ts` and
+   registered by the MCP server. The server validates inputs and service
+   results against those schemas and formats tool failures as MCP error results.
+2. `inspect_video` resolves or reuses a source snapshot, records a new
+   investigation pinned to that snapshot, and returns an `investigationRef`.
+3. Evidence calls use that reference to load the pinned snapshot, then route
+   caption or visual work through the corresponding acquirer. Acquirers may
+   reuse cached content or acquire and validate new content.
+4. The evidence service records acquisition and presentation state per
+   investigation. The MCP server returns a compact public projection with
+   identities, timestamps, completeness, pagination, provenance, and resource
+   references. The public result omits internal state summaries and transport
+   details.
 
 ## Distribution and startup
 
-The npm package is the bootstrap and release channel. On an existing native
-Node.js 24 LTS installation, `urma setup`:
+The npm package provides the setup command and distributes Urma releases. With
+a supported native Node.js version installed, `urma setup`:
 
 1. Detects the supported platform target and validates the user-owned local
    data root.

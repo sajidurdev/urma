@@ -2,9 +2,8 @@ import type { CandidateKey, SourceRef } from "../core/ids.js";
 import type { SnapshotRef } from "../core/model.js";
 
 /**
- * Process-local only
- * Never persist, log, return through MCP, or put in a snapshot descriptor
- * Delivery URLs may contain short-lived credentials
+ * Delivery URLs may contain short-lived credentials. Keep leases in process memory;
+ * do not persist or expose them in logs, MCP responses, or snapshot descriptors
  */
 export type RemoteAcquisitionLease = Readonly<{
   snapshotRef: SnapshotRef;

@@ -4,7 +4,7 @@ import { stableJson, type CandidateKey, type RemoteIdentity } from "../core/ids.
 import path from "node:path";
 import { assertRemoteTargetAllowed } from "../remote/egress.js";
 import { videoCodecForFormat } from "../remote/formats.js";
-import { ensureRemoteProxy, type RemoteOperationContext } from "../remote/worker.js";
+import { ensureRemoteProxy, type RemoteOperationContext } from "../remote/operation-context.js";
 import type { RemoteAcquisitionLease } from "../remote/lease.js";
 import { candidateKeyForFormat } from "../sources/candidates.js";
 import type { FormatSummary, ResolvedSource } from "../sources/types.js";
@@ -18,7 +18,7 @@ export type YtDlpRunner = (
   options?: RunOptions,
 ) => Promise<ProcessResult>;
 
-/** Keep raw metadata process-local; never persist or log it */
+/** Raw metadata may contain delivery URLs; keep it in memory, out of logs and durable storage */
 export type ExactFormatSnapshot = Readonly<{
   metadata: Readonly<Record<string, unknown>>;
   selected: Readonly<Record<string, unknown>>;
@@ -423,7 +423,6 @@ export class YtDlp {
     const snapshot = await this.exactFormatSnapshot(source, format, signal);
     const selected = snapshot.selected;
     const expectedCandidate = snapshot.candidateKey;
-    // Prefer the selector-specific URL; use manifest_url when it is absent
     const deliveryUrl = typeof selected.url === "string"
       ? selected.url
       : typeof selected.manifest_url === "string"

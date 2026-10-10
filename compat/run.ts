@@ -19,7 +19,7 @@ import { inspectMcpOutput, overviewMcpOutput } from "../src/mcp/schemas.js";
 import { SqliteStore } from "../src/store/sqlite-store.js";
 import { cadenceAssertionFailures } from "./cadence.js";
 
-/** Run compatibility checks through the public MCP contract */
+/** Run compatibility checks through the MCP client interface */
 
 type AnyRecord = Record<string, unknown>;
 type Status = "PASS" | "FAIL" | "BLOCKED" | "UNTESTED" | "NOT_RUN";

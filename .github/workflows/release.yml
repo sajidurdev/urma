@@ -372,32 +372,45 @@ jobs:
         run: node scripts/check-compatibility-gate.mjs release-artifact/compatibility/latest.json compat/fixtures/providers.json
 
   qualify:
-    name: ${{ matrix.name }}
+    name: ${{ matrix.target.name }} / ${{ matrix.node.label }}
     needs: checks_and_pack
     if: ${{ needs.checks_and_pack.result == 'success' }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.target.runner }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        include:
+        node:
+          - version: "22.16.0"
+            id: node-22.16.0
+            label: Node.js 22.16.0 minimum
+          - version: "22"
+            id: node-22-latest
+            label: Latest maintained Node.js 22
+          - version: "24"
+            id: node-24-latest
+            label: Latest maintained Node.js 24
+          - version: "26"
+            id: node-26-latest
+            label: Latest current Node.js 26
+        target:
           - name: Windows x64
-            target: windows-x64
+            id: windows-x64
             runner: windows-2025
           - name: Windows ARM64
-            target: windows-arm64
+            id: windows-arm64
             runner: windows-11-vs2026-arm
           - name: macOS Intel
-            target: macos-x64
+            id: macos-x64
             runner: macos-15-intel
           - name: macOS ARM64
-            target: macos-arm64
+            id: macos-arm64
             runner: macos-15
           - name: Linux x64 glibc
-            target: linux-x64-glibc
+            id: linux-x64-glibc
             runner: ubuntu-24.04
           - name: Linux ARM64 glibc
-            target: linux-arm64-glibc
+            id: linux-arm64-glibc
             runner: ubuntu-24.04-arm
     permissions:
       contents: read
@@ -414,17 +427,20 @@ jobs:
           name: urma-release-package-${{ github.run_id }}
           path: release-artifact
 
-      - name: Set up native Node 24
+      - name: Set up ${{ matrix.node.label }}
+        id: setup_node
         uses: actions/setup-node@v6
         with:
-          node-version-file: .node-version
+          node-version: ${{ matrix.node.version }}
+          check-latest: true
           package-manager-cache: false
 
       - name: Verify the exact tarball and prepare target paths
         shell: bash
         env:
           ARTIFACT_DIR: release-artifact
-          TARGET: ${{ matrix.target }}
+          TARGET: ${{ matrix.target.id }}
+          NODE_ID: ${{ matrix.node.id }}
         run: |
           node --input-type=module <<'NODE'
           import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -443,7 +459,7 @@ jobs:
           hash.update(bytes);
           if (hash.digest("hex") !== digestLine[0]) throw new Error("Downloaded tarball failed its SHA-256 check");
 
-          const evidenceDir = path.posix.join("qualification-results", process.env.TARGET);
+          const evidenceDir = path.posix.join("qualification-results", process.env.TARGET, process.env.NODE_ID);
           mkdirSync(evidenceDir, { recursive: true });
           writeFileSync(path.join(evidenceDir, "tarball.sha256"), readFileSync(digestFile));
           for (const [key, value] of Object.entries({
@@ -457,21 +473,22 @@ jobs:
 
       - name: Run the packed tarball native qualification harness
         shell: bash
+        env:
+          URMA_QUALIFY_NODE_VERSION: ${{ steps.setup_node.outputs.node-version }}
         run: |
           set -euo pipefail
-          export URMA_EXPECTED_TARGET='${{ matrix.target }}'
-          export URMA_QUALIFY_NODE_VERSION="$(cat .node-version)"
+          export URMA_EXPECTED_TARGET='${{ matrix.target.id }}'
           export URMA_PACKAGE_TARBALL="$TARBALL"
           export URMA_RESULT_DIR="$EVIDENCE_DIR"
-          export URMA_RUNNER_LABEL='${{ matrix.runner }}'
+          export URMA_RUNNER_LABEL='${{ matrix.target.runner }}'
           node scripts/qualify-native.mjs
 
       - name: Upload native qualification evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: urma-qualification-${{ matrix.target }}-${{ github.run_id }}
-          path: qualification-results/${{ matrix.target }}
+          name: urma-qualification-${{ matrix.target.id }}-${{ matrix.node.id }}-${{ github.run_id }}
+          path: qualification-results/${{ matrix.target.id }}/${{ matrix.node.id }}
           if-no-files-found: warn
           retention-days: 14
 
@@ -600,7 +617,7 @@ jobs:
           }
           NODE
 
-      - name: Attest the exact qualified tarball after all six lanes pass
+      - name: Attest the exact qualified tarball after all 24 native and runtime lanes pass
         if: ${{ needs.checks_and_pack.outputs.release_type != 'test' && needs.compatibility_gate.result == 'success' && needs.qualify.result == 'success' }}
         uses: actions/attest@v4
         with:

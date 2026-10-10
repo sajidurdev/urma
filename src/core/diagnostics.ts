@@ -546,14 +546,13 @@ export class ExactFrameDiagnosticTrace {
   }
 }
 
-/** Get the active exact-frame trace */
 export function currentExactFrameDiagnosticTrace():
   | ExactFrameDiagnosticTrace
   | null {
   return diagnosticStorage.getStore() ?? null;
 }
 
-/** Run an operation with request-local exact-frame tracing */
+/** Nested calls reuse the active trace; disabled top-level calls receive null */
 export async function withExactFrameDiagnostics<T>(
   enabled: boolean,
   seed: ExactFrameDiagnosticSeed,

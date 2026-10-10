@@ -25,7 +25,7 @@ import { URMA_VERSION } from "../version.js";
 import { MediaAcquirer } from "./media.js";
 import { createPanel } from "./panel.js";
 import { StoryboardAcquirer } from "./storyboard.js";
-import type { RemoteOperationContext } from "../remote/worker.js";
+import type { RemoteOperationContext } from "../remote/operation-context.js";
 
 type OverviewSource = "native-storyboard" | "navigation-media";
 type OverviewScope = Readonly<{ startMs: number; endMs: number }>;

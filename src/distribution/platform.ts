@@ -1,6 +1,7 @@
 import os from "node:os";
 import process from "node:process";
 import { UrmaError } from "../core/errors.js";
+import { SUPPORTED_NODE_RANGE } from "../version.js";
 
 export type TargetPlatform =
   | "windows-x64"
@@ -74,14 +75,57 @@ export function detectTargetPlatform(
 
 export function nodeVersionIsSupported(
   version: string,
-  range = ">=24 <25",
+  range = SUPPORTED_NODE_RANGE,
 ): boolean {
-  const match = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?/u.exec(version.trim());
-  if (!match) return false;
-  const major = Number(match[1]);
-  const lower = Number(/>=\s*(\d+)/u.exec(range)?.[1] ?? 0);
-  const upper = Number(/<\s*(\d+)/u.exec(range)?.[1] ?? Number.MAX_SAFE_INTEGER);
-  return Number.isSafeInteger(major) && major >= lower && major < upper;
+  const parsedVersion = parseVersionTuple(version, false);
+  if (!parsedVersion || typeof range !== "string" || range.trim() === "") {
+    return false;
+  }
+
+  let supported = false;
+  for (const alternative of range.split(/\s*\|\|\s*/u)) {
+    const match = /^>=\s*(\S+)\s+<\s*(\S+)$/u.exec(alternative.trim());
+    if (!match) return false;
+    const lower = parseVersionTuple(match[1], true);
+    const upper = parseVersionTuple(match[2], true);
+    if (!lower || !upper || compareVersions(lower, upper) >= 0) return false;
+    if (
+      compareVersions(parsedVersion, lower) >= 0 &&
+      compareVersions(parsedVersion, upper) < 0
+    ) {
+      supported = true;
+    }
+  }
+  return supported;
+}
+
+type VersionTuple = readonly [number, number, number];
+
+function parseVersionTuple(
+  value: unknown,
+  allowPartial: boolean,
+): VersionTuple | null {
+  if (typeof value !== "string") return null;
+  const components = value.split(".");
+  if (
+    components.length < 1 ||
+    components.length > 3 ||
+    (!allowPartial && components.length !== 3) ||
+    components.some((component) => !/^(?:0|[1-9][0-9]*)$/u.test(component))
+  ) {
+    return null;
+  }
+  const parsed = components.map(Number);
+  if (parsed.some((component) => !Number.isSafeInteger(component))) return null;
+  return [parsed[0] ?? 0, parsed[1] ?? 0, parsed[2] ?? 0];
+}
+
+function compareVersions(left: VersionTuple, right: VersionTuple): number {
+  for (let index = 0; index < left.length; index += 1) {
+    const difference = left[index]! - right[index]!;
+    if (difference !== 0) return difference;
+  }
+  return 0;
 }
 
 export function executionArchitecture(): string {

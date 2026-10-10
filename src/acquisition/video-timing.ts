@@ -222,8 +222,7 @@ export function parseVideoStreamCoverage(
         timeBase.rational.denominator,
       )
       : null;
-  // An absent presentation origin cannot map source time to media
-  // Do not turn an unknown origin into a zero-origin seek
+  // Without a presentation origin, the source start is unknown; do not assume zero
   const start = preciseStart ?? parseDecimal(stream.start_time);
   const duration = preciseDuration ?? parseDecimal(stream.duration);
   if (
@@ -304,8 +303,7 @@ export function parseStoredVideoCoverage(
     }
   }
 
-  // An artifact advertising precise fields must remain precise
-  // Do not silently downgrade malformed PTS metadata to rounded display seconds
+  // Reject malformed precise PTS fields instead of falling back to rounded display times
   if (hasPrecisePtsMetadata) return null;
 
   const start = parseDecimal(producer.validatedVideoStartTime) ??
@@ -327,7 +325,6 @@ export function parseStoredVideoCoverage(
   );
 }
 
-/** Parse the bounded-section PTS-aware producer contract */
 export function parseStoredBoundedVideoCoverage(
   producer: Readonly<Record<string, unknown>>,
 ): VideoPtsCoverage | null {
@@ -367,7 +364,7 @@ export function isTimestampCovered(
   );
 }
 
-/** Map a source-local target to FFmpeg's input-relative seek position. */
+/** Map a source-local timestamp to FFmpeg's input-relative seek position */
 export function physicalSeekMs(
   coverage: VideoPtsCoverage,
   nominalLocalMs: number,

@@ -16,8 +16,53 @@ import { pathToFileURL } from "node:url";
 
 const ACTIVE_SCHEMA = 1;
 const STATE_SCHEMA = 5;
+const SUPPORTED_NODE_RANGE = ">=22.16.0 <23 || >=24.0.0 <25 || >=26.0.0 <27";
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const HASH = /^[a-f0-9]{64}$/u;
+
+function compareVersions(left, right) {
+  for (let index = 0; index < left.length; index += 1) {
+    const difference = left[index] - right[index];
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function parseVersionTuple(value, allowPartial) {
+  if (typeof value !== "string") return null;
+  const components = value.split(".");
+  if (
+    components.length < 1 ||
+    components.length > 3 ||
+    (!allowPartial && components.length !== 3) ||
+    components.some((component) => !/^(?:0|[1-9][0-9]*)$/u.test(component))
+  ) {
+    return null;
+  }
+  const parsed = components.map(Number);
+  if (parsed.some((component) => !Number.isSafeInteger(component))) return null;
+  return [parsed[0] ?? 0, parsed[1] ?? 0, parsed[2] ?? 0];
+}
+
+function isSupportedNodeVersion(version) {
+  const parsedVersion = parseVersionTuple(version, false);
+  if (!parsedVersion) return false;
+  let supported = false;
+  for (const alternative of SUPPORTED_NODE_RANGE.split(/\s*\|\|\s*/u)) {
+    const match = /^>=\s*(\S+)\s+<\s*(\S+)$/u.exec(alternative.trim());
+    if (!match) return false;
+    const lower = parseVersionTuple(match[1], true);
+    const upper = parseVersionTuple(match[2], true);
+    if (!lower || !upper || compareVersions(lower, upper) >= 0) return false;
+    if (
+      compareVersions(parsedVersion, lower) >= 0 &&
+      compareVersions(parsedVersion, upper) < 0
+    ) {
+      supported = true;
+    }
+  }
+  return supported;
+}
 
 function fail(message, cause) {
   const error = new Error(message, cause === undefined ? undefined : { cause });
@@ -73,7 +118,7 @@ function executingTarget() {
     if (process.arch === "x64") return "macos-x64";
     if (process.arch === "arm64") return "macos-arm64";
   } else if (process.platform === "linux") {
-    if (process.arch !== "x64" && process.arch !== "arm64") fail(`Unsupported Linux Node architecture ${process.arch}; rerun setup with native Node 24`);
+    if (process.arch !== "x64" && process.arch !== "arm64") fail(`Unsupported Linux Node architecture ${process.arch}; rerun setup with a supported native Node.js runtime`);
     let glibc;
     try {
       glibc = process.report?.getReport?.().header?.glibcVersionRuntime;
@@ -173,7 +218,7 @@ async function verifyGenerationContent(chosen) {
 }
 
 async function validateGeneration(root, id, options = {}) {
-  if (!/^24\./u.test(process.versions.node)) fail(`This Node.js runtime is ${process.versions.node}, but Urma setup requires Node 24 LTS; rerun setup with supported Node 24`);
+  if (!isSupportedNodeVersion(process.versions.node)) fail(`This Node.js runtime is ${process.versions.node}, outside Urma's supported range ${SUPPORTED_NODE_RANGE}; rerun setup with a supported Node.js version`);
   const generationDir = installPath(root, id);
   let realRoot;
   try {
@@ -192,8 +237,9 @@ async function validateGeneration(root, id, options = {}) {
   const receiptPath = path.join(realGenerationDir, "receipt.json");
   await realContained(realGenerationDir, receiptPath, "Selected installation receipt");
   const receipt = await readJson(receiptPath, "Selected installation receipt");
+  if (!isSupportedNodeVersion(receipt.node?.version)) fail(`Installation ${id} records unsupported Node.js ${String(receipt.node?.version)}; rerun setup with a supported Node.js version`);
   const target = executingTarget();
-  if (receipt.schema !== 1 || receipt.installId !== id || receipt.target !== target || receipt.manifest?.target !== target || receipt.runtime?.stateSchemaVersion !== STATE_SCHEMA || typeof receipt.node?.execPath !== "string" || !path.isAbsolute(receipt.node.execPath) || !/^24\./u.test(receipt.node.version ?? "") || receipt.node.executionArchitecture !== `${process.platform}-${process.arch}`) fail(`Installation ${id} has incompatible receipt metadata or Node execution architecture; rerun setup`);
+  if (receipt.schema !== 1 || receipt.installId !== id || receipt.target !== target || receipt.manifest?.target !== target || receipt.runtime?.stateSchemaVersion !== STATE_SCHEMA || typeof receipt.node?.execPath !== "string" || !path.isAbsolute(receipt.node.execPath) || receipt.node.executionArchitecture !== `${process.platform}-${process.arch}`) fail(`Installation ${id} has incompatible receipt metadata or Node execution architecture; rerun setup`);
   if (!HASH.test(receipt.urma?.payloadSha256 ?? "") || !HASH.test(receipt.manifest?.identity ?? "") || typeof receipt.urma?.version !== "string" || receipt.urma.version.length === 0) fail(`Installation ${id} has invalid provenance hashes`);
   if (!receipt.tools || !receipt.runtime || !Array.isArray(receipt.policy?.flags) || receipt.policy.flags.length === 0 || receipt.qualification?.status !== "passed" || !Array.isArray(receipt.qualification.checks) || receipt.qualification.checks.length === 0 || !Array.isArray(receipt.notices)) fail(`Installation ${id} has incomplete receipt metadata`);
   const expected = {};
@@ -215,7 +261,7 @@ async function validateGeneration(root, id, options = {}) {
     const current = path.resolve(process.execPath);
     const recorded = path.resolve(receipt.node.execPath);
     const same = process.platform === "win32" ? current.toLowerCase() === recorded.toLowerCase() : current === recorded;
-    if (!same) fail(`The Node executable recorded by setup is ${recorded}, but this session uses ${current}; rerun setup with the supported Node 24 installation`);
+    if (!same) fail(`The Node executable recorded by setup is ${recorded}, but this session uses ${current}; rerun setup with the supported Node.js installation that created this runtime`);
   }
   return { generationDir: realGenerationDir, runtimeEntry: realRuntimeEntry, receipt, tools: expected };
 }

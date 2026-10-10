@@ -191,7 +191,7 @@ export function validateStaticDashManifest(
   return positiveDuration(durationMs, "dash");
 }
 
-/** Keep metadata duration for comparison; use validated transport duration */
+/** Use transport timing; keep metadata duration for comparison only */
 export function admitValidatedTimeline(
   metadataDurationMs: number | null,
   validated: FiniteTimeline,

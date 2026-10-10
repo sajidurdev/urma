@@ -17,7 +17,7 @@ import { BlobStore } from "../store/blob-store.js";
 import type { StoredArtifact, UrmaStore } from "../store/store.js";
 import { URMA_VERSION } from "../version.js";
 import { MediaAcquirer } from "./media.js";
-import type { RemoteOperationContext } from "../remote/worker.js";
+import type { RemoteOperationContext } from "../remote/operation-context.js";
 import type { SectionAcquisitionOutcome } from "./media.js";
 import {
   isTimestampCovered,

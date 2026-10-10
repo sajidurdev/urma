@@ -53,7 +53,7 @@ async function listenFixture(bytes: Buffer): Promise<{ server: ReturnType<typeof
 }
 
 test("generic direct MP4 resolution uses the local Safe Proxy end to end", async (t) => {
-  const bytes = await readFile(path.resolve("tests/fixtures/opaque-case-j.mp4"));
+  const bytes = await readFile(path.resolve("tests/fixtures/sample-video.mp4"));
   const fixture = await listenFixture(bytes);
   const proxy = new SafeProxy({
     lookup: async (hostname) => {
@@ -97,7 +97,7 @@ test("generic direct MP4 resolution uses the local Safe Proxy end to end", async
 });
 
 test("remote ffprobe and ffmpeg use the same Safe Proxy and restrictive profile", async (t) => {
-  const bytes = await readFile(path.resolve("tests/fixtures/opaque-case-j.mp4"));
+  const bytes = await readFile(path.resolve("tests/fixtures/sample-video.mp4"));
   const fixture = await listenFixture(bytes);
   const directory = await mkdtemp(path.join(os.tmpdir(), "urma-proxy-media-"));
   const config = loadConfig({ URMA_DATA_DIR: path.join(directory, "data") });

@@ -9,7 +9,7 @@ import type { ResolvedSource } from "../sources/types.js";
 import { candidateKeyForSourceFormat } from "../sources/candidates.js";
 import { Ffmpeg } from "../subprocess/ffmpeg.js";
 import { YtDlp } from "../subprocess/ytdlp.js";
-import type { RemoteOperationContext } from "../remote/worker.js";
+import type { RemoteOperationContext } from "../remote/operation-context.js";
 import { collectBinaryVersions } from "../subprocess/versions.js";
 import { BlobStore } from "../store/blob-store.js";
 import type { StoredArtifact, UrmaStore } from "../store/store.js";

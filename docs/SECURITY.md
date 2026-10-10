@@ -59,7 +59,7 @@ stored in `ACTIVE.backup.json`.
 
 The launcher validates:
 
-- Node.js 24 and the executing platform target;
+- a supported Node.js version and the executing platform target;
 - the active selector and generation containment;
 - the generation receipt and state schema version;
 - the runtime entry and native-tool paths inside the selected generation,

@@ -28,7 +28,7 @@ export type RunOptions = Readonly<{
   maxStdoutBytes?: number | undefined;
   maxStderrBytes?: number | undefined;
   signal?: AbortSignal | undefined;
-  /** Open read-only and expose only as child stdin; callers must pair this with a fixed fd: input. */
+  /** Open read-only and send as child stdin; arguments must use the fixed `fd:` input. */
   inputFile?: string | undefined;
   debug?: boolean | undefined;
   label?: string | undefined;
@@ -52,7 +52,7 @@ const CHILD_ENV_ALLOWLIST = [
   "TZ",
 ] as const;
 
-/** Keep credentials, proxy settings, hooks, browser paths, and host state out of child processes */
+/** Do not pass host credentials, proxy settings, hooks, or browser state to child processes */
 export function allowlistedEnvironment(
   input: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {

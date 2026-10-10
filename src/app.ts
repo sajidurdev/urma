@@ -4,7 +4,7 @@ import { EvidenceService } from "./evidence/service.js";
 import { BlobStore } from "./store/blob-store.js";
 import { SqliteStore } from "./store/sqlite-store.js";
 import { SafeProxy } from "./remote/egress.js";
-import type { RemoteOperationContext } from "./remote/worker.js";
+import type { RemoteOperationContext } from "./remote/operation-context.js";
 
 export async function openUrma(
   config: UrmaConfig = loadConfig(),

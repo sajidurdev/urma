@@ -14,7 +14,7 @@ import type {
   UrmaStore,
 } from "../store/store.js";
 import { YtDlp } from "../subprocess/ytdlp.js";
-import { ensureRemoteProxy, type RemoteOperationContext } from "../remote/worker.js";
+import { ensureRemoteProxy, type RemoteOperationContext } from "../remote/operation-context.js";
 import { collectBinaryVersions } from "../subprocess/versions.js";
 import { URMA_VERSION } from "../version.js";
 import type { CaptionTrackSummary, ResolvedSource } from "../sources/types.js";

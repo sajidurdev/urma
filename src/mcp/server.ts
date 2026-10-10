@@ -75,8 +75,7 @@ function investigationRefFromOutput(
   }
   return null;
 }
-// Keep visual resources in content; structuredContent carries the data object
-// Use text content for errors because they have no structured output
+// Success returns data in structuredContent and visuals in content; errors use text content
 type OutputSchema = { parse: (value: unknown) => unknown };
 function success(
   tool: string,

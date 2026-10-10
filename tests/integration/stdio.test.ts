@@ -16,6 +16,73 @@ import { runChecked } from "../../src/subprocess/runner.js";
 
 const cliEntrypoint = path.resolve("dist/src/cli/main.js");
 const stdioEntrypoint = path.resolve("dist/tests/support/stdio-entry.js");
+const nodeSqliteExperimentalWarningHeader =
+  /^\(node:\d+\) ExperimentalWarning: SQLite is an experimental feature and might change at any time$/u;
+const nodeSqliteExperimentalWarningContinuation =
+  /^\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)$/u;
+
+function stripNodeSqliteExperimentalWarning(stderr: string): string {
+  const lines = stderr.split(/(?<=\n)/u);
+  for (let index = 0; index < lines.length - 1; index++) {
+    const header = lines[index]!.replace(/\r?\n$/u, "");
+    const continuation = lines[index + 1]!.replace(/\r?\n$/u, "");
+    if (
+      nodeSqliteExperimentalWarningHeader.test(header) &&
+      nodeSqliteExperimentalWarningContinuation.test(continuation)
+    ) {
+      lines.splice(index, 2);
+      break;
+    }
+  }
+  return lines.join("");
+}
+
+test("stderr filter recognizes only Node's SQLite experimental warning", () => {
+  const expectedWarning =
+    "(node:123) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n" +
+    "(Use `node --trace-warnings ...` to show where the warning was created)\n";
+  const diagnostic = 'Urma debug {"event":"ready"}\n';
+  const nextDiagnostic = 'Urma debug {"event":"shutdown"}\n';
+  const unrelatedWarning =
+    "(node:123) ExperimentalWarning: another feature is experimental\n" +
+    "(Use `node --trace-warnings ...` to show where the warning was created)\n";
+  const wrongContinuation = expectedWarning.replace(
+    "to show where the warning was created",
+    "to show where the warning originated",
+  );
+
+  assert.equal(stripNodeSqliteExperimentalWarning(expectedWarning), "");
+  assert.equal(
+    stripNodeSqliteExperimentalWarning(expectedWarning + diagnostic),
+    diagnostic,
+  );
+  assert.equal(
+    stripNodeSqliteExperimentalWarning(diagnostic + expectedWarning),
+    diagnostic,
+  );
+  assert.equal(
+    stripNodeSqliteExperimentalWarning(
+      diagnostic + expectedWarning + nextDiagnostic,
+    ),
+    diagnostic + nextDiagnostic,
+  );
+  const crlfWarning = expectedWarning.replace(/\n/gu, "\r\n");
+  assert.equal(
+    stripNodeSqliteExperimentalWarning(
+      `before\r\n${crlfWarning}after\r\n`,
+    ),
+    "before\r\nafter\r\n",
+  );
+  assert.equal(stripNodeSqliteExperimentalWarning(diagnostic), diagnostic);
+  assert.equal(
+    stripNodeSqliteExperimentalWarning(unrelatedWarning),
+    unrelatedWarning,
+  );
+  assert.equal(
+    stripNodeSqliteExperimentalWarning(wrongContinuation),
+    wrongContinuation,
+  );
+});
 
 function processIsAlive(pid: number): boolean {
   try {
@@ -97,7 +164,7 @@ test("stdio server keeps stdout protocol-clean", async (t) => {
       "get_frames",
     ],
   );
-  assert.equal(stderr.trim(), "");
+  assert.equal(stripNodeSqliteExperimentalWarning(stderr).trim(), "");
 });
 
 test("raw stdio stdout stays valid MCP JSON-RPC through startup, discovery, request, and shutdown", async (t) => {
@@ -358,7 +425,10 @@ test("raw stdio stdout stays valid MCP JSON-RPC through startup, discovery, requ
     .trim()
     .split(/\r?\n/u)
     .filter(Boolean);
-  const stderrLines = stderr.trim().split(/\r?\n/u).filter(Boolean);
+  const stderrLines = stripNodeSqliteExperimentalWarning(stderr)
+    .trim()
+    .split(/\r?\n/u)
+    .filter(Boolean);
   assert(debugLines.length > 0, "debug mode should emit durable diagnostics");
   const debugEvents = debugLines.map(
     (line) => JSON.parse(line) as Record<string, unknown>,
@@ -399,13 +469,14 @@ test("packaged CLI exposes only MCP stdio, doctor, and version", async () => {
       encoding: "utf8",
       timeout: 10_000,
     });
+    const stderr = stripNodeSqliteExperimentalWarning(result.stderr);
     assert.equal(
       result.status,
       0,
-      `${flag} should exit successfully: ${result.stderr}`,
+      `${flag} should exit successfully: ${stderr}`,
     );
     assert.equal(result.stdout, `${packageJson.version}\n`);
-    assert.equal(result.stderr, "");
+    assert.equal(stderr, "");
   }
 
   for (
@@ -427,9 +498,13 @@ test("packaged CLI exposes only MCP stdio, doctor, and version", async () => {
       encoding: "utf8",
       timeout: 10_000,
     });
+    const stderr = stripNodeSqliteExperimentalWarning(result.stderr);
     assert.equal(result.status, 2, `${args.join(" ")} should be rejected`);
     assert.equal(result.stdout, "");
-    assert.equal(result.stderr, "Usage: urma [setup [--data-dir PATH] [--client generic --config PATH] | doctor | --version | -v]\n");
+    assert.equal(
+      stderr,
+      "Usage: urma [setup [--data-dir PATH] [--client generic --config PATH] | doctor | --version | -v]\n",
+    );
   }
 });
 
@@ -445,9 +520,10 @@ test("doctor rejects direct uninstalled startup", async () => {
         URMA_DATA_DIR: dataDir,
       },
     });
-    assert.equal(result.status, 1, result.stderr);
+    const stderr = stripNodeSqliteExperimentalWarning(result.stderr);
+    assert.equal(result.status, 1, stderr);
     assert.equal(result.stdout, "");
-    assert.match(result.stderr, /^Urma INSTALLATION_MISSING:/u);
+    assert.match(stderr, /^Urma INSTALLATION_MISSING:/u);
     await assert.rejects(access(dataDir));
   } finally {
     await rm(directory, { recursive: true, force: true });

@@ -1042,8 +1042,11 @@ async function main() {
   const target = process.env.URMA_EXPECTED_TARGET;
   const targetConfig = TARGETS[target];
   assert(targetConfig, `URMA_EXPECTED_TARGET must be one of ${Object.keys(TARGETS).join(", ")}`);
-  const expectedNodeVersion = process.env.URMA_QUALIFY_NODE_VERSION;
-  assert(expectedNodeVersion, "URMA_QUALIFY_NODE_VERSION is required so the lane records an exact Node version");
+  const expectedNodeVersion = process.env.URMA_QUALIFY_NODE_VERSION?.replace(/^v/u, "");
+  assert(
+    typeof expectedNodeVersion === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(expectedNodeVersion),
+    "URMA_QUALIFY_NODE_VERSION must be the exact resolved Node version from setup-node",
+  );
   const packageTarballInput = process.env.URMA_PACKAGE_TARBALL;
   assert(packageTarballInput, "URMA_PACKAGE_TARBALL is required");
   const resultDir = path.resolve(process.env.URMA_RESULT_DIR ?? path.join("qualification-results", target));

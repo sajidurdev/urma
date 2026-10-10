@@ -373,14 +373,14 @@ export async function setup(options: SetupOptions = {}): Promise<SetupResult> {
   if (!path.isAbsolute(nodeExecutable) || nodeExecutable.includes("\0")) throw new UrmaError("SETUP_FAILED", "Setup requires an absolute existing Node executable");
   let nodeInfo;
   try {
-    // Validate the resolved target of a user-owned Node symlink
-    // Keep process.execPath in the receipt and host config
+    // Follow user-owned symlinks when validating the target
+    // Keep the selected path so the launcher uses the same executable
     nodeInfo = await stat(nodeExecutable);
   } catch (error) {
-    throw new UrmaError("SETUP_FAILED", `Node executable ${nodeExecutable} does not exist; rerun setup with supported Node 24`, { cause: error });
+    throw new UrmaError("SETUP_FAILED", `Node executable ${nodeExecutable} does not exist; rerun setup with a supported Node.js runtime`, { cause: error });
   }
   if (!nodeInfo.isFile()) throw new UrmaError("SETUP_FAILED", `Node executable ${nodeExecutable} is not a regular file`);
-  if (!nodeVersionIsSupported(process.versions.node, SUPPORTED_NODE_RANGE)) throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", `Urma setup requires Node 24 LTS (${SUPPORTED_NODE_RANGE}); current Node is ${process.versions.node}`);
+  if (!nodeVersionIsSupported(process.versions.node, SUPPORTED_NODE_RANGE)) throw new UrmaError("REQUIRED_BINARY_UNSUPPORTED", `Urma setup requires a supported Node.js version (${SUPPORTED_NODE_RANGE}); current Node is ${process.versions.node}`);
   const detected = detectTargetPlatform();
   if (options.target !== undefined && options.target !== detected) throw new UrmaError("UNSUPPORTED_PLATFORM", `Requested target ${options.target} does not match the native executing Node target ${detected}`);
   const target = options.target ?? detected;
