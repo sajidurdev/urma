@@ -39,6 +39,46 @@ type FrameMedia = Readonly<{
   transportCacheHit: boolean;
 }>;
 
+const SOURCE_FIRST_FRAME_PROOF_VERSION = 1;
+const SOURCE_FIRST_FRAME_TIMING_TOLERANCE_MS = 1;
+
+function validatesSourceFirstFrameProof(
+  artifact: StoredArtifact,
+  coverage: VideoPtsCoverage,
+): boolean {
+  const proof = artifact.producer.validatedSourceFirstFrame;
+  if (
+    artifact.startMs !== 0 ||
+    artifact.params.sourceFirstFrameProofVersion !==
+      SOURCE_FIRST_FRAME_PROOF_VERSION ||
+    typeof proof !== "object" ||
+    proof === null ||
+    Array.isArray(proof)
+  ) return false;
+  const value = proof as Record<string, unknown>;
+  const candidateKey = artifact.producer.candidateKey;
+  const sourceVideoDelayMs = value.sourceVideoDelayMs;
+  const sectionVideoDelayMs = value.sectionVideoDelayMs;
+  const measuredSectionDelayMs =
+    (coverage.startSeconds - coverage.containerStartSeconds) * 1_000;
+  return value.version === SOURCE_FIRST_FRAME_PROOF_VERSION &&
+    typeof candidateKey === "string" &&
+    artifact.params.candidateKey === candidateKey &&
+    value.candidateKey === candidateKey &&
+    typeof value.frameSha256 === "string" &&
+    /^[a-f0-9]{64}$/u.test(value.frameSha256) &&
+    typeof sourceVideoDelayMs === "number" &&
+    Number.isFinite(sourceVideoDelayMs) &&
+    sourceVideoDelayMs > 0 &&
+    typeof sectionVideoDelayMs === "number" &&
+    Number.isFinite(sectionVideoDelayMs) &&
+    sectionVideoDelayMs > 0 &&
+    Math.abs(sourceVideoDelayMs - sectionVideoDelayMs) <=
+      SOURCE_FIRST_FRAME_TIMING_TOLERANCE_MS &&
+    Math.abs(sectionVideoDelayMs - measuredSectionDelayMs) <=
+      SOURCE_FIRST_FRAME_TIMING_TOLERANCE_MS;
+}
+
 function targetedDerivativeUnavailable(
   message: string,
   detail: Readonly<Record<string, unknown>> = {},
@@ -126,10 +166,18 @@ function mediaForGlobalTimestamp(
   const coverage = parseStoredBoundedVideoCoverage(artifact.producer);
   if (coverage === null) return null;
   const nominalLocalMs = globalTimeMs - artifact.startMs;
-  if (!isTimestampCovered(coverage, nominalLocalMs)) return null;
+  const allowVerifiedFirstFrame = globalTimeMs === 0 &&
+    validatesSourceFirstFrameProof(artifact, coverage);
+  if (
+    !isTimestampCovered(coverage, nominalLocalMs, allowVerifiedFirstFrame)
+  ) return null;
   let seekMs: number;
   try {
-    seekMs = physicalSeekMs(coverage, nominalLocalMs);
+    seekMs = physicalSeekMs(
+      coverage,
+      nominalLocalMs,
+      allowVerifiedFirstFrame,
+    );
   } catch {
     return null;
   }

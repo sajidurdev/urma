@@ -224,12 +224,10 @@
   {
     "provider": "Vidyard",
     "tier": "B",
-    "url": "https://video.vidyard.com/watch/zeFV9EcXkK1tZKMsr2iTrx",
-    "fixtureTitle": "Vidyard demo videos",
-    "fixtureId": "zeFV9EcXkK1tZKMsr2iTrx",
+    "url": null,
     "restart": false,
     "refresh": false,
-    "notes": "Public Vidyard demo fixture."
+    "untestedReason": "No verified public single-video fixture; checked singleton candidates returned HTTP 403 during media timeline validation."
   },
   {
     "provider": "PeerTube",

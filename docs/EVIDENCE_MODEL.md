@@ -48,7 +48,11 @@ does not replace it in evidence provenance.
 Downloaded media sections are transport artifacts. Their requested bounds and
 their validated video-stream PTS coverage are recorded separately. A transport
 section covers an evidence point only after the timing check and frame
-validation succeed.
+validation succeed. For a zero-time request whose first section frame has a
+later PTS, Urma also compares that frame with the first decoded frame from the
+selected rendition's initial HLS segment and checks their relative video delay.
+It also requires matching display geometry. Unsupported or mismatched
+source-start evidence leaves the section subject to ordinary PTS coverage.
 
 Batching can share remote setup and transport work. It does not combine the
 requested intervals or make one target's success validate another target.

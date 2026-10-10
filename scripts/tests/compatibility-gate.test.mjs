@@ -114,14 +114,65 @@ test("Tier A external block still blocks because Tier A is incomplete", () => {
   assert.equal(summary.tierAQualification, "INCOMPLETE");
 });
 
-test("Tier B known transport limitation is visible but non-blocking", () => {
+test("unverified, missing, and unknown attribution cannot exempt a Tier B timing coverage failure", () => {
+  const cases = [
+    { name: "legacy transport", responsibility: "transport" },
+    { name: "missing attribution" },
+    { name: "unknown attribution", responsibility: "future-category" },
+  ];
+
+  for (const item of cases) {
+    const summary = evaluateCompatibility(manifest, report([
+      passResult(),
+      failingResult("Tier B fixture", "B", "PARTIAL_PASS", {
+        class: "ACQUISITION_FAILED",
+        ...(item.responsibility === undefined ? {} : { responsibility: item.responsibility }),
+        blocking: true,
+        observedError: "Bounded section [0,2001) does not cover target 0 ms",
+      }),
+    ]));
+
+    assert.equal(summary.releaseCorrectness, "FAIL", item.name);
+    assert.equal(summary.externalCoverage, "INCOMPLETE", item.name);
+    assert.equal(summary.regressionEvidence.length, 1, item.name);
+    assert.match(summary.regressionEvidence[0], /Bounded section \[0,2001\) does not cover target 0 ms/u, item.name);
+  }
+});
+
+test("explicit Tier B fixture and provider restrictions remain non-blocking", () => {
+  const entries = [
+    ...manifest,
+    { provider: "Tier B login fixture", tier: "B", url: "https://example.test/login" },
+  ];
+  const summary = evaluateCompatibility(entries, report([
+    passResult(),
+    failingResult("Tier B fixture", "B", "BLOCKED", {
+      class: "PROVIDER_403_OR_RATE_LIMIT",
+      responsibility: "upstream",
+      blocking: true,
+      observedError: "runner IP blocked",
+    }),
+    failingResult("Tier B login fixture", "B", "UNTESTED", {
+      class: "FIXTURE_LOGIN_REQUIRED",
+      responsibility: "fixture",
+      blocking: true,
+      observedError: "fixture requires login",
+    }),
+  ]));
+
+  assert.equal(summary.releaseCorrectness, "PASS");
+  assert.equal(summary.externalCoverage, "INCOMPLETE");
+  assert.deepEqual(summary.regressionEvidence, []);
+});
+
+test("explicitly non-blocking Tier B failures stay outside regression evidence", () => {
   const summary = evaluateCompatibility(manifest, report([
     passResult(),
     failingResult("Tier B fixture", "B", "PARTIAL_PASS", {
       class: "ACQUISITION_FAILED",
-      responsibility: "transport",
-      blocking: true,
-      observedError: "Bounded section [0,2001) does not cover target 0 ms",
+      responsibility: "Urma",
+      blocking: false,
+      observedError: "optional cadence target unavailable",
     }),
   ]));
 

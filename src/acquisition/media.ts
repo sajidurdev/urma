@@ -1,4 +1,4 @@
-import { readdir, realpath, stat } from "node:fs/promises";
+import { copyFile, mkdir, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { UrmaConfig } from "../config.js";
 import {
@@ -13,9 +13,12 @@ import { deterministicRequestKey } from "../core/request-key.js";
 import type { FormatSummary, ResolvedSource } from "../sources/types.js";
 import { candidateKeyForSourceFormat, safeFormatDescription } from "../sources/candidates.js";
 import { Ffprobe } from "../subprocess/ffprobe.js";
-import type { ProcessResult } from "../subprocess/runner.js";
+import { subprocessMediaInput } from "../subprocess/remote-media.js";
+import { runChecked, type ProcessResult } from "../subprocess/runner.js";
 import { YtDlp } from "../subprocess/ytdlp.js";
 import type { RemoteAcquisitionLease } from "../remote/lease.js";
+import { assertRemoteTargetAllowed } from "../remote/egress.js";
+import { verifyRuntimeTool } from "../distribution/integrity.js";
 import {
   type BinaryVersions,
   collectBinaryVersions,
@@ -31,6 +34,7 @@ import {
 } from "./remote-budget.js";
 import { type AcquisitionHandle, startAcquisition } from "./records.js";
 import {
+  isTimestampCovered,
   parseStoredBoundedVideoCoverage,
   parseStoredVideoCoverage,
   parseVideoStreamCoverage,
@@ -38,7 +42,8 @@ import {
   type VideoPtsCoverage,
 } from "./video-timing.js";
 
-type Downloader = Pick<YtDlp, "run"> & Partial<Pick<YtDlp, "lease">>;
+type Downloader = Pick<YtDlp, "run"> &
+  Partial<Pick<YtDlp, "lease" | "manifestText">>;
 type DownloadSpec = Readonly<{
   operation: string;
   kind: ArtifactKind;
@@ -53,6 +58,21 @@ type AcquiredMedia = Readonly<{
   artifact: StoredArtifact;
   path: string;
   cacheHit: boolean;
+}>;
+
+type SourceFirstFrameProof = Readonly<{
+  version: 1;
+  candidateKey: string;
+  frameSha256: string;
+  sourceVideoDelayMs: number;
+  sectionVideoDelayMs: number;
+}>;
+
+type AcquisitionDeadline = Readonly<{
+  signal: AbortSignal;
+  remainingMs(): number;
+  assertActive(cause?: unknown): void;
+  dispose(): void;
 }>;
 
 export type SectionBatchRequirement = Readonly<{
@@ -118,6 +138,305 @@ const SECTION_OUTPUT_TEMPLATE =
   "media-%(section_start)010.3f-%(section_end)010.3f.%(ext)s";
 // yt-dlp sections use seconds; Urma identities use integer milliseconds
 const SECTION_METADATA_TOLERANCE_MS = 1;
+const SOURCE_FIRST_FRAME_PROOF_VERSION = 1;
+const SOURCE_FIRST_FRAME_MANIFEST_MAX_BYTES = 1_048_576;
+const SOURCE_FIRST_FRAME_MANIFEST_MAX_LINES = 8_192;
+
+function acquisitionDeadline(
+  parent: AbortSignal | undefined,
+  timeoutMs: number,
+): AcquisitionDeadline {
+  const expiresAt = performance.now() + timeoutMs;
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromParent = () => controller.abort(parent?.reason);
+  if (parent?.aborted) abortFromParent();
+  else parent?.addEventListener("abort", abortFromParent, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  timer.unref();
+  return {
+    signal: controller.signal,
+    remainingMs() {
+      this.assertActive();
+      return Math.max(1, Math.floor(expiresAt - performance.now()));
+    },
+    assertActive(cause?: unknown) {
+      if (parent?.aborted) {
+        throw new UrmaError(
+          "CANCELLED",
+          "Bounded media acquisition was cancelled",
+          { ...(cause === undefined ? {} : { cause }) },
+        );
+      }
+      if (timedOut || performance.now() >= expiresAt) {
+        timedOut = true;
+        controller.abort();
+        throw new UrmaError(
+          "MEDIA_ACQUISITION_TIMEOUT",
+          "Bounded media acquisition exceeded its shared wall-time limit",
+          { retryable: true, ...(cause === undefined ? {} : { cause }) },
+        );
+      }
+    },
+    dispose() {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", abortFromParent);
+    },
+  };
+}
+
+function errorAfterDeadline(
+  deadline: AcquisitionDeadline | null,
+  error: unknown,
+): unknown {
+  if (deadline === null) return error;
+  try {
+    deadline.assertActive(error);
+    return error;
+  } catch (normalized) {
+    return normalized;
+  }
+}
+
+function firstHlsMediaSegmentUri(manifest: string): string | null {
+  if (
+    Buffer.byteLength(manifest, "utf8") > SOURCE_FIRST_FRAME_MANIFEST_MAX_BYTES
+  ) return null;
+  const lines = manifest.replace(/^\uFEFF/u, "").split(/\r?\n/u);
+  if (
+    lines.length > SOURCE_FIRST_FRAME_MANIFEST_MAX_LINES ||
+    lines[0]?.trim() !== "#EXTM3U"
+  ) return null;
+  let sequence = 0;
+  let expectingSegment = false;
+  let firstSegment: string | null = null;
+  let endList = false;
+  for (const rawLine of lines.slice(1)) {
+    const line = rawLine.trim();
+    if (line.length === 0) continue;
+    if (line.startsWith("#")) {
+      if (line.startsWith("#EXT-X-TWITCH-ELAPSED-SECS:")) {
+        const value = line.slice("#EXT-X-TWITCH-ELAPSED-SECS:".length);
+        if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/u.test(value) || Number(value) !== 0) {
+          return null;
+        }
+        continue;
+      }
+      if (line.startsWith("#EXT-X-TWITCH-TOTAL-SECS:")) {
+        const value = line.slice("#EXT-X-TWITCH-TOTAL-SECS:".length);
+        if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/u.test(value) ||
+            !Number.isFinite(Number(value)) || Number(value) <= 0) {
+          return null;
+        }
+        continue;
+      }
+      if (
+        line.startsWith("#EXT-X-START:") ||
+        line.startsWith("#EXT-X-STREAM-INF:") ||
+        line.startsWith("#EXT-X-I-FRAME-STREAM-INF:") ||
+        line.startsWith("#EXT-X-MEDIA:") ||
+        line.startsWith("#EXT-X-DISCONTINUITY-SEQUENCE:") ||
+        line.startsWith("#EXT-X-GAP") ||
+        line.startsWith("#EXT-X-SKIP:") ||
+        line.startsWith("#EXT-X-BYTERANGE:") ||
+        line.startsWith("#EXT-X-MAP:") ||
+        line.startsWith("#EXT-X-PART:") ||
+        line.startsWith("#EXT-X-PRELOAD-HINT:") ||
+        line.startsWith("#EXT-X-RENDITION-REPORT:") ||
+        line.startsWith("#EXT-X-SERVER-CONTROL:") ||
+        line.startsWith("#EXT-X-KEY:") && !/^#EXT-X-KEY:METHOD=NONE(?:,|$)/u.test(line)
+      ) return null;
+      if (firstSegment === null) {
+        if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:")) {
+          const value = line.slice("#EXT-X-MEDIA-SEQUENCE:".length);
+          if (!/^0+$/u.test(value)) return null;
+          sequence = 0;
+        } else if (line.startsWith("#EXT-X-DISCONTINUITY")) {
+          return null;
+        } else if (line.startsWith("#EXTINF:")) {
+          if (expectingSegment) return null;
+          const value = line.slice("#EXTINF:".length).split(",", 1)[0] ?? "";
+          if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/u.test(value) || Number(value) <= 0) {
+            return null;
+          }
+          expectingSegment = true;
+        } else if (line === "#EXT-X-ENDLIST") {
+          return null;
+        } else if (
+          line.startsWith("#EXT-X-VERSION:") ||
+          line.startsWith("#EXT-X-TARGETDURATION:") ||
+          line.startsWith("#EXT-X-PLAYLIST-TYPE:") ||
+          line === "#EXT-X-INDEPENDENT-SEGMENTS"
+        ) {
+          continue;
+        } else if (line.startsWith("#EXT-X-")) {
+          return null;
+        }
+      } else if (line === "#EXT-X-ENDLIST") {
+        endList = true;
+      }
+      continue;
+    }
+    if (firstSegment !== null) continue;
+    if (!expectingSegment) return null;
+    firstSegment = line;
+    expectingSegment = false;
+  }
+  if (sequence !== 0 || !endList || firstSegment === null) return null;
+  if (expectingSegment) return null;
+  return firstSegment;
+}
+
+function safeFirstSegmentUrl(
+  lease: RemoteAcquisitionLease,
+  uri: string,
+): string | null {
+  try {
+    const base = new URL(lease.deliveryUrl);
+    if (
+      !["http:", "https:"].includes(base.protocol) ||
+      base.username.length > 0 ||
+      base.password.length > 0 ||
+      uri.length > 8_192
+    ) return null;
+    const segment = new URL(uri, base);
+    if (
+      !["http:", "https:"].includes(segment.protocol) ||
+      segment.username.length > 0 ||
+      segment.password.length > 0 ||
+      segment.hash.length > 0
+    ) return null;
+    assertRemoteTargetAllowed({ url: segment.href, purpose: "fragment" });
+    return segment.href;
+  } catch {
+    return null;
+  }
+}
+
+function firstFrameGeometryKey(
+  stream: Readonly<Record<string, unknown>>,
+): string | null {
+  const width = stream.width;
+  const height = stream.height;
+  if (
+    typeof width !== "number" || !Number.isSafeInteger(width) || width <= 0 ||
+    typeof height !== "number" || !Number.isSafeInteger(height) || height <= 0
+  ) return null;
+  let normalizedSar: string | null;
+  if (stream.sample_aspect_ratio === undefined || stream.sample_aspect_ratio === null) {
+    normalizedSar = null;
+  } else {
+    const sar = typeof stream.sample_aspect_ratio === "string"
+      ? /^(\d+):(\d+)$/u.exec(stream.sample_aspect_ratio.trim())
+      : null;
+    if (!sar) return null;
+    const sarWidth = Number(sar[1]);
+    const sarHeight = Number(sar[2]);
+    if (
+      !Number.isSafeInteger(sarWidth) || sarWidth <= 0 ||
+      !Number.isSafeInteger(sarHeight) || sarHeight <= 0
+    ) return null;
+    const divisor = (left: number, right: number): number => {
+      let a = left;
+      let b = right;
+      while (b !== 0) [a, b] = [b, a % b];
+      return a;
+    };
+    normalizedSar = `${sarWidth / divisor(sarWidth, sarHeight)}:${
+      sarHeight / divisor(sarWidth, sarHeight)
+    }`;
+  }
+  const rotation = (value: unknown): number | null | undefined => {
+    if (value === undefined || value === null) return null;
+    const degrees = typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim().length <= 32
+      ? Number(value.trim())
+      : Number.NaN;
+    if (!Number.isFinite(degrees)) return undefined;
+    return Math.round((((degrees % 360) + 360) % 360) * 1_000) / 1_000;
+  };
+  const tags = typeof stream.tags === "object" && stream.tags !== null &&
+      !Array.isArray(stream.tags)
+    ? stream.tags as Record<string, unknown>
+    : {};
+  const tagRotation = rotation(tags.rotate);
+  if (tagRotation === undefined) return null;
+  const sideData = Array.isArray(stream.side_data_list)
+    ? stream.side_data_list as unknown[]
+    : [];
+  const display: Array<{ matrix: string | null; rotation: number | null }> = [];
+  for (const rawItem of sideData) {
+    if (
+      typeof rawItem !== "object" || rawItem === null ||
+      Array.isArray(rawItem)
+    ) continue;
+    const item = rawItem as Record<string, unknown>;
+    if (item.side_data_type !== "Display Matrix") continue;
+    const matrix = typeof item.displaymatrix === "string"
+      ? item.displaymatrix.trim().replace(/\s+/gu, " ")
+      : null;
+    const displayRotation = rotation(item.rotation);
+    if (displayRotation === undefined) return null;
+    if (matrix === null && displayRotation === null) return null;
+    display.push({ matrix, rotation: displayRotation });
+  }
+  return JSON.stringify({
+    width,
+    height,
+    sampleAspectRatio: normalizedSar,
+    tagRotation,
+    display,
+  });
+}
+
+async function firstDecodedRgbFrameSha256(
+  config: UrmaConfig,
+  file: string,
+  remoteContext: RemoteOperationContext | null,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<string | null> {
+  await verifyRuntimeTool(config, "ffmpeg");
+  const mediaInput = await subprocessMediaInput(file, remoteContext);
+  const result = await runChecked(
+    config.ffmpeg,
+    [
+      ...mediaInput.args,
+      "-v",
+      "error",
+      "-i",
+      mediaInput.input,
+      "-map",
+      "0:v:0",
+      "-frames:v",
+      "1",
+      "-vf",
+      "format=rgb24",
+      "-f",
+      "hash",
+      "-hash",
+      "sha256",
+      "pipe:1",
+    ],
+    {
+      signal,
+      timeoutMs,
+      maxStdoutBytes: 1_024,
+      maxStderrBytes: Math.min(config.limits.subprocessStderrBytes, 64 * 1024),
+      inputFile: mediaInput.inputFile,
+      debug: config.debug,
+      label: "ffmpeg",
+      diagnosticRole: "hls-source-first-frame-check",
+    },
+  );
+  return /^SHA256=([a-f0-9]{64})\s*$/imu.exec(
+    result.stdout.toString("utf8"),
+  )?.[1] ?? null;
+}
 
 function targetedDerivativeUnavailable(
   message: string,
@@ -287,8 +606,25 @@ function sectionSpec(
       fidelity: "evidence",
       requestedStartMs: startMs,
       requestedEndMs: endMs,
+      ...(startMs === 0
+        ? { sourceFirstFrameProofVersion: SOURCE_FIRST_FRAME_PROOF_VERSION }
+        : {}),
     },
   };
+}
+
+function needsSourceFirstFrameProof(
+  artifact: StoredArtifact,
+  startMs: number,
+): boolean {
+  if (
+    startMs !== 0 ||
+    artifact.producer.validatedSourceFirstFrame !== undefined
+  ) return false;
+  const coverage = parseStoredBoundedVideoCoverage(artifact.producer);
+  return coverage !== null &&
+    !isTimestampCovered(coverage, 0) &&
+    isTimestampCovered(coverage, 0, true);
 }
 
 function sectionRequestKey(requirement: SectionBatchRequirement): string {
@@ -551,6 +887,18 @@ export class MediaAcquirer {
     endMs: number,
     signal?: AbortSignal,
   ): Promise<AcquiredMedia> {
+    const requirement: SectionBatchRequirement = {
+      source,
+      investigationRef: ref,
+      startMs,
+      endMs,
+    };
+    const cached = await this.#cachedSection(requirement);
+    if (cached) {
+      return needsSourceFirstFrameProof(cached.artifact, startMs)
+        ? await this.#verifyCachedSection(requirement, cached, signal)
+        : cached;
+    }
     return await this.#download(
       source,
       ref,
@@ -598,8 +946,15 @@ export class MediaAcquirer {
       ) {
         const missing: SectionBatchRequirement[] = [];
         for (const requirement of group) {
-          const cached = await this.#cachedSection(requirement);
+          let cached = await this.#cachedSection(requirement);
           if (cached) {
+            if (needsSourceFirstFrameProof(cached.artifact, requirement.startMs)) {
+              cached = await this.#verifyCachedSection(
+                requirement,
+                cached,
+                signal,
+              );
+            }
             diagnostics.cacheHits += 1;
             outcomes.set(sectionRequirementIdentity(requirement), {
               status: "fulfilled",
@@ -643,7 +998,10 @@ export class MediaAcquirer {
             ? null
             : normalizeError(batchFailure).code;
           if (batchFailureCode === "CANCELLED") throw batchFailure;
-          if (batchFailureCode === "MEDIA_BUDGET_EXCEEDED") {
+          if (
+            batchFailureCode === "MEDIA_BUDGET_EXCEEDED" ||
+            batchFailureCode === "MEDIA_ACQUISITION_TIMEOUT"
+          ) {
             outcomes.set(identity, {
               status: "rejected",
               reason: batchFailure,
@@ -738,6 +1096,143 @@ export class MediaAcquirer {
       trace?.addStage("boundedArtifactCacheLookupMs", elapsedMs);
     }
   }
+
+  async #verifyCachedSection(
+    requirement: SectionBatchRequirement,
+    cached: AcquiredMedia,
+    signal?: AbortSignal,
+  ): Promise<AcquiredMedia> {
+    const spec = sectionSpec(
+      requirement.source,
+      requirement.startMs,
+      requirement.endMs,
+    );
+    const coverage = parseStoredBoundedVideoCoverage(cached.artifact.producer);
+    if (
+      requirement.startMs !== 0 ||
+      cached.artifact.sourceRef !== requirement.source.sourceRef ||
+      cached.artifact.sourceRevision !== requirement.source.revision ||
+      cached.artifact.startMs !== 0 ||
+      cached.artifact.endMs !== requirement.endMs ||
+      cached.artifact.params.candidateKey !== spec.params.candidateKey ||
+      cached.artifact.producer.candidateKey !== spec.params.candidateKey ||
+      cached.artifact.params.formatId !== spec.format.id ||
+      cached.artifact.producer.formatId !== spec.format.id ||
+      cached.artifact.producer.validatedSourceFirstFrame !== undefined ||
+      coverage === null ||
+      isTimestampCovered(coverage, 0) ||
+      !isTimestampCovered(coverage, 0, true)
+    ) return cached;
+    const budget = this.config.limits.maxTargetedMediaBytes;
+    const deadline = acquisitionDeadline(
+      signal,
+      this.config.limits.maxRemoteAcquisitionWallMs,
+    );
+    const trace = currentExactFrameDiagnosticTrace();
+    const remoteStarted = performance.now();
+    trace?.markRemoteAcquisition("media_section");
+    try {
+      return await withRemoteAcquisitionDirectory(
+        this.config,
+        "media-prefix-verification",
+        budget,
+        deadline.signal,
+        async (temporary, remoteSignal) => {
+          const cachedInfo = await stat(cached.path);
+          if (cachedInfo.size > budget) {
+            throw new UrmaError(
+              "MEDIA_BUDGET_EXCEEDED",
+              "Cached bounded section exceeds the first-frame verification byte budget",
+            );
+          }
+          const sectionFile = path.join(temporary, "cached-section.bin");
+          await copyFile(cached.path, sectionFile);
+          const sectionProbe = await new Ffprobe(
+            this.config,
+            this.remoteContext,
+          ).inspect(sectionFile, remoteSignal);
+          deadline.assertActive();
+          const streams = Array.isArray(sectionProbe.streams)
+            ? sectionProbe.streams as Array<Record<string, unknown>>
+            : [];
+          const sectionVideoStream = streams.find((item) =>
+            item.codec_type === "video"
+          );
+          const sectionFormat = typeof sectionProbe.format === "object" &&
+              sectionProbe.format !== null
+            ? sectionProbe.format as Record<string, unknown>
+            : {};
+          const measuredCoverage = sectionVideoStream === undefined
+            ? null
+            : parseVideoStreamCoverage(
+              sectionVideoStream,
+              sectionFormat.start_time,
+            );
+          if (
+            sectionVideoStream === undefined ||
+            measuredCoverage === null ||
+            JSON.stringify(serializeVideoPtsCoverage(coverage)) !==
+              JSON.stringify(serializeVideoPtsCoverage(measuredCoverage))
+          ) return cached;
+          const lease = await leaseFor(
+            this.downloader,
+            requirement.source,
+            spec.format,
+            remoteSignal,
+          );
+          deadline.assertActive();
+          const proof = await this.#verifiedSourceFirstFrame(
+            requirement.source,
+            spec,
+            lease,
+            sectionFile,
+            measuredCoverage,
+            sectionVideoStream,
+            temporary,
+            budget,
+            budget,
+            remoteSignal,
+            deadline,
+          );
+          deadline.assertActive();
+          if (proof === null) return cached;
+          await assertRemoteDirectoryWithinBudget(
+            temporary,
+            budget,
+            "cached bounded section and first HLS source segment",
+          );
+          const artifact: StoredArtifact = {
+            ...cached.artifact,
+            producer: {
+              ...cached.artifact.producer,
+              validatedSourceFirstFrame: proof,
+            },
+          };
+          this.store.putArtifact(artifact, {
+            requestKey: sectionRequestKey(requirement),
+            operation: "media-section",
+          });
+          return { artifact, path: cached.path, cacheHit: true };
+        },
+        budget,
+      );
+    } catch (error) {
+      const failure = errorAfterDeadline(deadline, error);
+      const code = normalizeError(failure).code;
+      if (
+        code === "CANCELLED" ||
+        code === "MEDIA_BUDGET_EXCEEDED" ||
+        code === "MEDIA_ACQUISITION_TIMEOUT"
+      ) throw failure;
+      return cached;
+    } finally {
+      deadline.dispose();
+      trace?.addStage(
+        "remoteBoundedAcquisitionMs",
+        performance.now() - remoteStarted,
+      );
+    }
+  }
   async #acquireSingleIntoOutcomes(
     requirement: SectionBatchRequirement,
     outcomes: Map<string, SectionAcquisitionResult>,
@@ -825,6 +1320,12 @@ export class MediaAcquirer {
         eligible[0]!.endMs,
       );
       const totalBudget = perSectionBudget * eligible.length;
+      const deadline = eligible.some((requirement) => requirement.startMs === 0)
+        ? acquisitionDeadline(
+          signal,
+          this.config.limits.maxRemoteAcquisitionWallMs,
+        )
+        : null;
       try {
         const remoteStarted = performance.now();
         try {
@@ -832,19 +1333,21 @@ export class MediaAcquirer {
             this.config,
             "media-batch",
             totalBudget,
-            signal,
+            deadline?.signal ?? signal,
             async (temporary, remoteSignal) => {
               let result: ProcessResult | null = null;
               let processError: unknown = null;
+              let lease: RemoteAcquisitionLease | null = null;
               try {
                 invoked = true;
                 trace?.markRemoteAcquisition("media_section");
-                const lease = await leaseFor(
+                lease = await leaseFor(
                   this.downloader,
                   source,
                   spec.format,
                   remoteSignal,
                 );
+                deadline?.assertActive();
                 result = await this.downloader.run(
                   [
                     ...eligible.flatMap((requirement) => [
@@ -862,7 +1365,8 @@ export class MediaAcquirer {
                   ],
                   {
                     signal: remoteSignal,
-                    timeoutMs: this.config.limits.maxRemoteAcquisitionWallMs,
+                    timeoutMs: deadline?.remainingMs() ??
+                      this.config.limits.maxRemoteAcquisitionWallMs,
                   },
                 );
                 if (result.code !== 0) {
@@ -881,6 +1385,7 @@ export class MediaAcquirer {
                     "CANCELLED",
                     "Bounded-section batch was cancelled before outputs could be validated",
                   );
+                deadline?.assertActive(aborted);
                 for (const requirement of eligible) {
                   const identity = sectionRequirementIdentity(requirement);
                   failures.set(identity, aborted);
@@ -932,6 +1437,9 @@ export class MediaAcquirer {
                     requirement,
                     perSectionBudget,
                     remoteSignal,
+                    lease,
+                    totalBudget,
+                    deadline,
                   );
                   const normalizedProcessError = processError === null
                     ? null
@@ -957,30 +1465,44 @@ export class MediaAcquirer {
                       processExitCode: result?.code ?? errorExitCode,
                     },
                     candidate.coverage,
+                    candidate.sourceFirstFrameProof,
                   );
                   values.set(identity, value);
                 } catch (error) {
+                  const failure = errorAfterDeadline(deadline, error);
                   invalid += 1;
-                  failures.set(identity, error);
-                  handles.get(identity)!.fail(error);
+                  failures.set(identity, failure);
+                  handles.get(identity)!.fail(failure);
                 }
               }
+              deadline?.assertActive();
             },
             perSectionBudget,
           );
+        } catch (error) {
+          const failure = errorAfterDeadline(deadline, error);
+          for (const requirement of eligible) {
+            const identity = sectionRequirementIdentity(requirement);
+            if (values.has(identity) || failures.has(identity)) continue;
+            unresolved.add(identity);
+            failures.set(identity, failure);
+            handles.get(identity)!.fail(failure);
+          }
         } finally {
+          deadline?.dispose();
           trace?.addStage(
             "remoteBoundedAcquisitionMs",
             performance.now() - remoteStarted,
           );
         }
       } catch (error) {
+        const failure = errorAfterDeadline(deadline, error);
         for (const requirement of eligible) {
           const identity = sectionRequirementIdentity(requirement);
           if (values.has(identity) || failures.has(identity)) continue;
           unresolved.add(identity);
-          failures.set(identity, error);
-          handles.get(identity)!.fail(error);
+          failures.set(identity, failure);
+          handles.get(identity)!.fail(failure);
         }
       }
     }
@@ -1004,10 +1526,15 @@ export class MediaAcquirer {
     requirement: SectionBatchRequirement,
     budgetBytes: number,
     signal?: AbortSignal,
+    lease: RemoteAcquisitionLease | null = null,
+    directoryBudgetBytes = budgetBytes,
+    deadline: AcquisitionDeadline | null = null,
   ): Promise<{
     file: string;
     durationSeconds: number;
     coverage: VideoPtsCoverage;
+    videoStream: Record<string, unknown>;
+    sourceFirstFrameProof: SourceFirstFrameProof | null;
   }> {
     const trace = currentExactFrameDiagnosticTrace();
     const file = await measureDiagnosticAsync(
@@ -1084,15 +1611,257 @@ export class MediaAcquirer {
           requirement.endMs,
           durationSeconds,
         );
-        return { durationSeconds, coverage };
+        return { durationSeconds, coverage, videoStream };
       },
     );
     return {
       file,
       durationSeconds: validated.durationSeconds,
       coverage: validated.coverage,
+      videoStream: validated.videoStream,
+      sourceFirstFrameProof: await this.#verifiedSourceFirstFrame(
+        requirement.source,
+        sectionSpec(
+          requirement.source,
+          requirement.startMs,
+          requirement.endMs,
+        ),
+        lease,
+        file,
+        validated.coverage,
+        validated.videoStream,
+        canonicalTemporary,
+        directoryBudgetBytes,
+        budgetBytes,
+        signal ?? deadline?.signal,
+        deadline,
+      ),
     };
   }
+
+  async #verifiedSourceFirstFrame(
+    source: ResolvedSource,
+    spec: DownloadSpec,
+    lease: RemoteAcquisitionLease | null,
+    sectionFile: string,
+    sectionCoverage: VideoPtsCoverage,
+    sectionVideoStream: Readonly<Record<string, unknown>>,
+    temporary: string,
+    directoryBudgetBytes: number,
+    perFileBudgetBytes: number,
+    signal: AbortSignal | undefined,
+    deadline: AcquisitionDeadline | null,
+  ): Promise<SourceFirstFrameProof | null> {
+    if (
+      spec.kind !== "media_section" ||
+      spec.startMs !== 0 ||
+      spec.params.sourceFirstFrameProofVersion !==
+        SOURCE_FIRST_FRAME_PROOF_VERSION ||
+      isTimestampCovered(sectionCoverage, 0)
+    ) return null;
+    let sourceSegmentBytes = 0;
+    const report = (
+      result: "verified" | "unavailable",
+      reason: string,
+      timing?: Readonly<{
+        sourceVideoDelayMs: number;
+        sectionVideoDelayMs: number;
+      }>,
+    ) => {
+      diagnosticLog(this.config.debug, "bounded-source-first-frame-proof", {
+        result,
+        reason,
+        sourceSegmentBytes,
+        ...(timing ?? {}),
+      });
+    };
+    if (!isTimestampCovered(sectionCoverage, 0, true)) {
+      report("unavailable", "zero-not-covered-by-first-frame");
+      return null;
+    }
+    if (lease === null || deadline === null) {
+      report("unavailable", "missing-lease-or-deadline");
+      return null;
+    }
+    if (typeof this.downloader.manifestText !== "function") {
+      report("unavailable", "manifest-reader-unavailable");
+      return null;
+    }
+    const operationSignal = signal ?? deadline.signal;
+    const candidateKey = candidateKeyForSourceFormat(source, spec.format);
+    if (
+      lease.candidateKey !== candidateKey ||
+      lease.sourceRef !== source.sourceRef ||
+      lease.snapshotRef.revision !== source.revision ||
+      lease.formatId !== spec.format.id ||
+      lease.expiresAtMs <= Date.now()
+    ) {
+      report("unavailable", "lease-candidate-mismatch");
+      return null;
+    }
+
+    try {
+      const manifest = await this.downloader.manifestText(
+        lease.deliveryUrl,
+        operationSignal,
+        { timeoutMs: deadline.remainingMs() },
+      );
+      deadline.assertActive();
+      const firstUri = firstHlsMediaSegmentUri(manifest);
+      if (firstUri === null) {
+        report("unavailable", "unsupported-playlist");
+        return null;
+      }
+      const segmentUrl = safeFirstSegmentUrl(lease, firstUri);
+      if (segmentUrl === null) {
+        report("unavailable", "segment-url-rejected");
+        return null;
+      }
+      const extension = path.extname(new URL(segmentUrl).pathname).toLowerCase();
+      const segmentExtension = /^\.[a-z0-9]{1,8}$/u.test(extension)
+        ? extension
+        : ".bin";
+      const prefixDirectory = path.join(temporary, "source-prefix");
+      await mkdir(prefixDirectory, { recursive: true });
+      const firstSegmentFile = path.join(
+        prefixDirectory,
+        `first-segment${segmentExtension}`,
+      );
+      const segmentResult = await this.downloader.run(
+        ["-o", firstSegmentFile, segmentUrl],
+        {
+          signal: operationSignal,
+          timeoutMs: deadline.remainingMs(),
+          cwd: temporary,
+        },
+      );
+      deadline.assertActive();
+      if (segmentResult.code !== 0) {
+        throw new UrmaError(
+          "SOURCE_UNAVAILABLE",
+          "The first HLS source segment could not be acquired for source-start verification",
+          { retryable: true },
+        );
+      }
+      sourceSegmentBytes = (await stat(firstSegmentFile)).size;
+      await assertRemoteDirectoryWithinBudget(
+        temporary,
+        directoryBudgetBytes,
+        "bounded section and first HLS source segment",
+        perFileBudgetBytes,
+      );
+      const sourceProbe = await new Ffprobe(
+        this.config,
+        this.remoteContext,
+      ).inspect(firstSegmentFile, operationSignal);
+      deadline.assertActive();
+      const sourceStreams = Array.isArray(sourceProbe.streams)
+        ? sourceProbe.streams as Array<Record<string, unknown>>
+        : [];
+      const sourceVideo = sourceStreams.find((item) => item.codec_type === "video");
+      if (sourceVideo === undefined) {
+        report("unavailable", "source-video-timing-unavailable");
+        return null;
+      }
+      const sourceFormat = typeof sourceProbe.format === "object" &&
+          sourceProbe.format !== null
+        ? sourceProbe.format as Record<string, unknown>
+        : {};
+      const sourceCoverage = parseVideoStreamCoverage(
+        sourceVideo,
+        sourceFormat.start_time,
+      );
+      if (sourceCoverage === null) {
+        report("unavailable", "source-video-timing-unavailable");
+        return null;
+      }
+      const sourceVideoDelayMs =
+        (sourceCoverage.startSeconds - sourceCoverage.containerStartSeconds) *
+          1_000;
+      const sectionVideoDelayMs =
+        (sectionCoverage.startSeconds - sectionCoverage.containerStartSeconds) *
+          1_000;
+      if (
+        !Number.isFinite(sourceVideoDelayMs) ||
+        !Number.isFinite(sectionVideoDelayMs) ||
+        sourceVideoDelayMs <= 0 ||
+        sectionVideoDelayMs <= 0 ||
+        Math.abs(sourceVideoDelayMs - sectionVideoDelayMs) >
+          SECTION_METADATA_TOLERANCE_MS
+      ) {
+        report("unavailable", "video-delay-mismatch", {
+          sourceVideoDelayMs: Number(sourceVideoDelayMs.toFixed(3)),
+          sectionVideoDelayMs: Number(sectionVideoDelayMs.toFixed(3)),
+        });
+        return null;
+      }
+      const sourceGeometry = firstFrameGeometryKey(sourceVideo);
+      const sectionGeometry = firstFrameGeometryKey(sectionVideoStream);
+      if (sourceGeometry === null || sourceGeometry !== sectionGeometry) {
+        report("unavailable", "first-frame-geometry-mismatch", {
+          sourceVideoDelayMs: Number(sourceVideoDelayMs.toFixed(3)),
+          sectionVideoDelayMs: Number(sectionVideoDelayMs.toFixed(3)),
+        });
+        return null;
+      }
+      const sourceFrameSha256 = await firstDecodedRgbFrameSha256(
+        this.config,
+        firstSegmentFile,
+        this.remoteContext,
+        operationSignal,
+        deadline.remainingMs(),
+      );
+      deadline.assertActive();
+      const sectionFrameSha256 = await firstDecodedRgbFrameSha256(
+        this.config,
+        sectionFile,
+        this.remoteContext,
+        operationSignal,
+        deadline.remainingMs(),
+      );
+      deadline.assertActive();
+      if (
+        sourceFrameSha256 === null ||
+        sourceFrameSha256 !== sectionFrameSha256
+      ) {
+        report("unavailable", "first-frame-mismatch", {
+          sourceVideoDelayMs: Number(sourceVideoDelayMs.toFixed(3)),
+          sectionVideoDelayMs: Number(sectionVideoDelayMs.toFixed(3)),
+        });
+        return null;
+      }
+      report("verified", "identity-and-timing-match", {
+        sourceVideoDelayMs: Number(sourceVideoDelayMs.toFixed(3)),
+        sectionVideoDelayMs: Number(sectionVideoDelayMs.toFixed(3)),
+      });
+      return {
+        version: SOURCE_FIRST_FRAME_PROOF_VERSION,
+        candidateKey,
+        frameSha256: sourceFrameSha256,
+        sourceVideoDelayMs: Number(sourceVideoDelayMs.toFixed(3)),
+        sectionVideoDelayMs: Number(sectionVideoDelayMs.toFixed(3)),
+      };
+    } catch (error) {
+      let normalized = normalizeError(error);
+      try {
+        deadline.assertActive(error);
+      } catch (deadlineError) {
+        normalized = normalizeError(deadlineError);
+      }
+      const code = normalized.code;
+      if (
+        code === "CANCELLED" ||
+        code === "MEDIA_BUDGET_EXCEEDED" ||
+        code === "MEDIA_ACQUISITION_TIMEOUT"
+      ) {
+        report("unavailable", code.toLowerCase());
+        throw normalized;
+      }
+      report("unavailable", "verification-failed");
+      return null;
+    }
+  }
+
   #assertBoundedDuration(
     startMs: number,
     endMs: number,
@@ -1122,6 +1891,7 @@ export class MediaAcquirer {
     acquisition: AcquisitionHandle,
     acquisitionMetadata: Readonly<Record<string, unknown>> = {},
     coverage: VideoPtsCoverage | null = null,
+    sourceFirstFrameProof: SourceFirstFrameProof | null = null,
   ): Promise<AcquiredMedia> {
     const trace = currentExactFrameDiagnosticTrace();
     const started = performance.now();
@@ -1169,6 +1939,9 @@ export class MediaAcquirer {
           ...(spec.kind === "evidence_media"
             ? { validatedSourcePrefix: "complete" }
             : {}),
+          ...(sourceFirstFrameProof === null
+            ? {}
+            : { validatedSourceFirstFrame: sourceFirstFrameProof }),
           ...(coverage === null ? {} : serializeVideoPtsCoverage(coverage)),
         },
         createdAt: new Date().toISOString(),
@@ -1256,6 +2029,12 @@ export class MediaAcquirer {
       debug: this.config.debug,
     });
     const budget = mediaBudgetBytes(this.config, spec.kind);
+    const deadline = spec.kind === "media_section" && spec.startMs === 0
+      ? acquisitionDeadline(
+        signal,
+        this.config.limits.maxRemoteAcquisitionWallMs,
+      )
+      : null;
     try {
       assertExpectedRemoteBytes(
         expectedMediaBytes(source, spec),
@@ -1268,8 +2047,8 @@ export class MediaAcquirer {
           this.config,
           "media",
           budget,
-          signal,
-            async (temporary, remoteSignal) => {
+          deadline?.signal ?? signal,
+          async (temporary, remoteSignal) => {
             onInvoke?.();
             if (
               spec.kind === "media_section" || spec.kind === "evidence_media"
@@ -1282,6 +2061,7 @@ export class MediaAcquirer {
               spec.format,
               remoteSignal,
             );
+            deadline?.assertActive();
             await this.downloader.run(
               [
                 ...(lease
@@ -1297,10 +2077,12 @@ export class MediaAcquirer {
               ],
               {
                 signal: remoteSignal,
-                timeoutMs: this.config.limits.maxRemoteAcquisitionWallMs,
+                timeoutMs: deadline?.remainingMs() ??
+                  this.config.limits.maxRemoteAcquisitionWallMs,
                 cwd: temporary,
               },
             );
+            deadline?.assertActive();
             const validated = await measureDiagnosticAsync(
               trace,
               "artifactValidationMs",
@@ -1406,7 +2188,7 @@ export class MediaAcquirer {
                         durationSeconds,
                       );
                     }
-                    return { file, durationSeconds, coverage };
+                    return { file, durationSeconds, coverage, videoStream };
                   },
                 );
                 await assertRemoteDirectoryWithinBudget(
@@ -1414,7 +2196,27 @@ export class MediaAcquirer {
                   budget,
                   spec.operation,
                 );
-                return media;
+                const sourceFirstFrameProof = media.coverage === null
+                  ? null
+                  : await this.#verifiedSourceFirstFrame(
+                    source,
+                    spec,
+                    lease,
+                    media.file,
+                    media.coverage,
+                    media.videoStream,
+                    temporary,
+                    budget,
+                    budget,
+                    remoteSignal,
+                    deadline,
+                  );
+                await assertRemoteDirectoryWithinBudget(
+                  temporary,
+                  budget,
+                  spec.operation,
+                );
+                return { ...media, sourceFirstFrameProof };
               },
             );
             const versions = await collectBinaryVersions(
@@ -1422,6 +2224,7 @@ export class MediaAcquirer {
               ["ytdlp", "ffprobe"],
               remoteSignal,
             );
+            deadline?.assertActive();
             return await this.#promoteDownloaded(
               source,
               spec,
@@ -1431,6 +2234,7 @@ export class MediaAcquirer {
               acquisition,
               {},
               validated.coverage,
+              validated.sourceFirstFrameProof,
             );
           },
         );
@@ -1443,8 +2247,11 @@ export class MediaAcquirer {
         );
       }
     } catch (error) {
-      acquisition.fail(error);
-      throw error;
+      const failure = errorAfterDeadline(deadline, error);
+      acquisition.fail(failure);
+      throw failure;
+    } finally {
+      deadline?.dispose();
     }
   }
 }

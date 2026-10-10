@@ -20,6 +20,9 @@ stable release, the compatibility gate requires six provider fixtures to pass:
 X / Twitter, Facebook Reel, Instagram Reel, Loom, Streamable, and Mux-hosted
 public HLS. Other sources are best effort; yt-dlp support alone does not
 guarantee that Urma can inspect a video.
+Blocking Urma failures on best-effort providers also fail release correctness;
+provider access and fixture limitations are tracked separately as external
+coverage.
 
 YouTube single-video URLs use a dedicated yt-dlp resolver path. YouTube is
 outside the six-provider release gate, and availability depends on upstream

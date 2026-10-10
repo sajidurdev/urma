@@ -257,6 +257,7 @@ export class YtDlp {
   async manifestText(
     url: string,
     signal?: AbortSignal,
+    options: Readonly<{ timeoutMs?: number }> = {},
   ): Promise<string> {
     assertRemoteTargetAllowed({ url, purpose: "manifest" });
     const result = await this.run(
@@ -267,7 +268,7 @@ export class YtDlp {
       ],
       {
         signal,
-        timeoutMs: this.config.limits.metadataTimeoutMs,
+        timeoutMs: options.timeoutMs ?? this.config.limits.metadataTimeoutMs,
         remote: true,
         internalArgs: ["--dump-pages"],
       },

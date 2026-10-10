@@ -186,8 +186,14 @@ stream timing before committing the section.
 
 Decoder seeks use the container's start time, recorded separately from the
 video stream's PTS coverage. A complete source copy can return its first video
-frame when the requested timestamp precedes that frame. Bounded sections
-still require validated video coverage of the requested timestamp.
+frame when the requested timestamp precedes that frame. A bounded section may
+use its delayed first video frame for source time zero only after Urma verifies
+that its first decoded image and display geometry match those of the selected
+rendition's first HLS media segment, and that both have the same video delay
+relative to their container start. This check accepts only a finite sequence-zero media playlist
+with an end marker; unsupported playlist forms retain strict PTS coverage.
+Bounded sections at nonzero times still require validated video coverage of
+the requested timestamp.
 
 An exact-frame panel is produced after the canonical frames exist. It uses up
 to 12 request-ordered frames in a deterministic row-major layout. The panel is
