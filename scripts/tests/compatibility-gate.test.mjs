@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { evaluateCompatibility, gateText, runGate } from "../check-compatibility-gate.mjs";
+
+const gatePath = fileURLToPath(new URL("../check-compatibility-gate.mjs", import.meta.url));
 
 const manifest = [
   { provider: "Tier A pass", tier: "A", url: "https://example.test/a" },
@@ -215,7 +219,7 @@ test("gate output keeps correctness, Tier A, coverage, and regression status sep
   assert.match(output, /Urma regression evidence: none/u);
 });
 
-test("release_type=test reports a failed correctness gate but exits without publishing", async () => {
+test("correctness failures make every release mode fail", async () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "urma-compatibility-gate-"));
   try {
     const reportPath = path.join(directory, "report.json");
@@ -230,15 +234,59 @@ test("release_type=test reports a failed correctness gate but exits without publ
       passResult("Tier B fixture", "B"),
     ])));
     writeFileSync(manifestPath, JSON.stringify(manifest));
-    const result = await runGate({
-      reportPath,
-      manifestPath,
-      releaseType: "test",
-    });
+    for (const releaseType of ["test", "rc", "stable"]) {
+      const result = await runGate({ reportPath, manifestPath, releaseType });
+      assert.equal(result.shouldFail, true, releaseType);
+      assert.match(result.output, /Release correctness: FAIL/u);
 
+      const cli = spawnSync(process.execPath, [gatePath, reportPath, manifestPath], {
+        cwd: directory,
+        env: { ...process.env, RELEASE_TYPE: releaseType },
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      assert.equal(cli.status, 1, `${releaseType}: ${cli.error ?? cli.stderr}`);
+      assert.match(cli.stdout, /Release correctness: FAIL/u);
+      assert.match(cli.stderr, /Release correctness compatibility gate failed/u);
+      if (releaseType === "test") {
+        assert.match(cli.stdout, /release_type=test: validation only; publication is disabled/u);
+      }
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("test release mode passes when only an optional provider is blocked", async () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "urma-compatibility-gate-"));
+  try {
+    const reportPath = path.join(directory, "report.json");
+    const manifestPath = path.join(directory, "manifest.json");
+    writeFileSync(reportPath, JSON.stringify(report([
+      passResult(),
+      failingResult("Tier B fixture", "B", "BLOCKED", {
+        class: "PROVIDER_403_OR_RATE_LIMIT",
+        responsibility: "upstream",
+        blocking: true,
+        observedError: "runner IP blocked",
+      }),
+    ])));
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const result = await runGate({ reportPath, manifestPath, releaseType: "test" });
     assert.equal(result.shouldFail, false);
-    assert.match(result.output, /Release correctness: FAIL/u);
-    assert.match(result.output, /release_type=test: diagnostic only; publication is disabled/u);
+    assert.equal(result.summary.externalCoverage, "INCOMPLETE");
+
+    const cli = spawnSync(process.execPath, [gatePath, reportPath, manifestPath], {
+      cwd: directory,
+      env: { ...process.env, RELEASE_TYPE: "test" },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    assert.equal(cli.status, 0, String(cli.error ?? cli.stderr));
+    assert.equal(cli.stderr, "");
+    assert.match(cli.stdout, /Release correctness: PASS/u);
+    assert.match(cli.stdout, /External live-provider coverage: INCOMPLETE/u);
+    assert.match(cli.stdout, /release_type=test: validation only; publication is disabled/u);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

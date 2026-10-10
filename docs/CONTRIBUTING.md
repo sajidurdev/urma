@@ -86,6 +86,9 @@ the Node.js 24.21.0 toolchain pinned in `.node-version`. Changes to installation
 launchers, managed binaries, or release metadata require the corresponding
 distribution checks to remain passing.
 
+Test release runs enforce the same correctness gate as RC and stable releases,
+with publication disabled.
+
 ## Documentation quality
 
 Check tool arguments against [`src/mcp/schemas.ts`](https://github.com/sajidurdev/urma/blob/main/src/mcp/schemas.ts)

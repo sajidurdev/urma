@@ -124,7 +124,7 @@ jobs:
           sudo apt-get install --no-install-recommends -y ffmpeg unzip
           ffmpeg -version
           ffprobe -version
-          node scripts/prepare-ci-tools.mjs
+          node --experimental-strip-types scripts/prepare-ci-tools.mjs
 
       - name: Install locked dependencies
         shell: bash

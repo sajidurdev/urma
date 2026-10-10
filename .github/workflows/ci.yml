@@ -41,7 +41,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y ffmpeg unzip
-          node scripts/prepare-ci-tools.mjs
+          node --experimental-strip-types scripts/prepare-ci-tools.mjs
       - name: Install locked dependencies
         run: |
           PNPM_SPEC="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; const spec = JSON.parse(readFileSync("package.json", "utf8")).packageManager; if (typeof spec !== "string" || !/^pnpm@\d+\.\d+\.\d+$/u.test(spec)) throw new Error("package.json must pin pnpm with an exact version"); process.stdout.write(spec);')"
