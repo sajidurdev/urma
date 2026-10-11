@@ -137,6 +137,10 @@ test("target manifest is explicit, pinned, and provider-agnostic across six targ
   assert.equal(RELEASE_MANIFESTS["linux-arm64-glibc"].ytdlp.executable, "yt-dlp_linux_aarch64");
   assert.equal(RELEASE_MANIFESTS["macos-x64"].ytdlp.executable, "yt-dlp_macos");
   assert.equal(RELEASE_MANIFESTS["macos-arm64"].ytdlp.executable, "yt-dlp_macos");
+  for (const target of ["macos-x64", "macos-arm64"] as const) {
+    assert.equal(RELEASE_MANIFESTS[target].ffmpeg.licensing.license, "GPL-3.0-or-later");
+    assert.equal(RELEASE_MANIFESTS[target].ffprobe.licensing.license, "GPL-3.0-or-later");
+  }
 });
 
 test("platform detection qualifies executing architecture and rejects musl-like Linux", () => {
