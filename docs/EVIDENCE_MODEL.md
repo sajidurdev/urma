@@ -4,299 +4,347 @@
   <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/docs/assets/evidence-model.png" alt="Urma evidence model" width="100%" />
 </p>
 
-Urma reports what it acquired and presented for one investigation. The
-returned records describe bounded observations; they do not turn a sample,
-caption match, or cache entry into a claim about the whole source.
+Urma exposes five tools over MCP. Call `inspect_video` to open a source, then
+use its `investigationRef` to request captions or images from that snapshot.
 
-## Terms
+- [Inspect a video](#inspect_video)
+- [Search or read captions](#caption-evidence)
+- [Get a visual overview](#overview-semantics)
+- [Get frames or a panel](#exact-frames-and-panels)
+- [Sample at a fixed cadence](#fixed-cadence-schedules)
+- [Read saved resources](#resources-and-state)
 
-- A **source** is the logical local path or remote identity.
-- A **snapshot** is one immutable observation of that source, including its
-  validated finite timeline.
-- An **investigation** pins one source snapshot and records the evidence
-  presented to the host.
-- An **artifact** is validated content, identified by its SHA-256 digest.
-- A **transport artifact** is acquired media used to produce evidence.
-- A **presentation** is the act of returning evidence to one investigation.
-- A **cache hit** describes reuse of stored content or acquisition work. It is
-  not evidence presentation by itself.
+## Times and references
 
-Every evidence call after `inspect_video` names an `investigationRef`. A fresh
-investigation starts with no presented evidence, even when source-level bytes
-are already cached. The same artifact can be presented to multiple
-investigations; each investigation has its own presentation record and
-resource authorization.
+Times are nonnegative integer milliseconds from the start of the source.
+An interval `[startMs, endMs)` includes its start and excludes its end. It must
+satisfy `startMs < endMs`, with `endMs` no later than the video duration. A
+point timestamp must be earlier than the duration.
 
-## Evidence kinds
+A source reference identifies a local or remote video. An investigation
+reference identifies the snapshot opened by inspection. An artifact reference
+identifies saved content, such as a JPEG, by its SHA-256 hash. Treat these
+references and pagination cursors as opaque values returned by the server.
 
-The visual evidence kinds are:
+The examples below use placeholder references. Replace them with values from
+your calls. Examples with time ranges assume a video at least 30 seconds long.
 
-| Kind | Meaning |
-| --- | --- |
-| `point` | One exact JPEG frame for a requested source timestamp. |
-| `sparse` | Locator samples inside a source-global interval. `get_overview` uses this kind. |
-| `ordered_points` | Ordered frame samples inside an interval. A burst uses this kind. |
-| `scheduled_exact_points` | A paged fixed-cadence list of exact point requests. |
+## `inspect_video`
 
-The v0.1 MCP surface does not expose audio evidence.
-
-For a frame point, Urma validates video timing and asks for the first decodable
-presentation frame at or after the requested timestamp. The decoder's physical
-seek position is an acquisition detail. It is not the requested timestamp and
-does not replace it in evidence provenance.
-A complete source copy can supply its first video frame when the requested
-timestamp precedes that frame.
-
-Downloaded media sections are transport artifacts. Their requested bounds and
-their validated video-stream PTS coverage are recorded separately. A transport
-section covers an evidence point only after timing and frame validation
-succeed. For a zero-time request whose first section frame has a later PTS,
-Urma compares the first decoded RGB frames from that section and the selected
-rendition's initial HLS segment. The decoded frames must be identical, and the
-display geometry must match. Both video delays relative to their container
-starts must be positive and agree within 1 ms. The playlist must be finite,
-start at sequence zero, and contain an end marker. Unsupported or mismatched
-source-start evidence leaves the section subject to ordinary PTS coverage.
-Bounded sections at nonzero times still require validated video coverage of
-the requested timestamp.
-
-Batching can share remote setup and transport work. It does not combine the
-requested intervals or make one target's success validate another target.
-
-## Overview semantics
-
-`get_overview` requests 12 temporally distributed cells for either the whole
-source or a source-global interval. The interval is half-open:
-
-```text
-[startMs, endMs)
-```
-
-The response distinguishes the requested interval from the observed samples:
+Open a URL, an allowed local file, or a previously returned `sourceRef`:
 
 ```json
-{
-  "requestedInterval": { "startMs": 0, "endMs": 60000 },
-  "observedCoverage": {
-    "kind": "sample-points-only",
-    "continuous": false,
-    "sampleTimestampsMs": [0, 5000, 10000],
-    "adjacentSpacingMs": [5000, 5000]
-  }
-}
+{ "source": "/absolute/path/to/demo.mp4" }
 ```
 
-The example is schematic. A real response can contain up to 12 returned cells,
-and a short interval can produce fewer than 12 distinct points. The timestamps
-in `sampleTimestampsMs` are the cells returned by that call. Their spacing
-does not imply observation between points.
+| Argument | Required | Description |
+| --- | --- | --- |
+| `source` | Yes | HTTP(S) URL, local path, or `sourceRef`; up to 4,096 characters. |
+| `freshness` | No | `reuse` (default) or `refresh`. |
 
-An overview uses a native storyboard when available and otherwise decodes
-navigation media. Its artifact role is `locator`. Current overview producers
-report nominal sample timing. Each cell also reports provenance identifying a
-storyboard sample or a decoded sample and, for storyboard data, its source
-artifact and cell/fragment indexes.
+Inspection returns `sourceRef`, `investigationRef`, source metadata and
+validated duration, capabilities, caption tracks, cache information, and
+`stateResource`. A source must describe one finite video; see
+[Product scope](PRODUCT_SCOPE.md#source-admission) for accepted inputs.
 
-The overview path does not automatically extract exact frames for the cell
-timestamps. An overview cell and an exact frame requested at the same time are
-different evidence operations.
+For a known remote URL or a `sourceRef`, `reuse` opens the latest saved
+snapshot. `refresh` resolves the source again. Passing a local path reads its
+video and selected caption sidecar again, so changed bytes produce a new
+revision. Passing a local `sourceRef` with `reuse` opens its saved snapshot
+without rereading the path.
 
-Repeated overview calls expose their sample relationship through
-`sampling.sampleReuse`:
-
-| Relation | Meaning |
-| --- | --- |
-| `not-scoped` | A whole-source overview. |
-| `no-prior-overview` | No comparable overview was previously presented in this investigation. |
-| `same-samples` | The returned underlying samples match an earlier overview. |
-| `different-subset` | A scoped native storyboard selected another subset of the same underlying samples. |
-| `new-decoded-samples` | Navigation media decoded a new set of sample points. |
-
-`reusedUnderlyingSamples` describes visual sample identity. Reusing transport
-media alone does not make it `same-samples`.
-
-Whole-source and scoped overviews remain separate presentation events. A
-scoped overview does not erase or rewrite the whole-source observation.
-
-## Exact frames and panels
-
-`get_frames` accepts three request forms:
-
-- `points`: 1–12 unique timestamps, each before the source duration;
-- `burst`: a half-open interval with 2–12 ordered samples; and
-- `cadence`: a half-open interval with a positive integer cadence.
-
-Explicit points and burst samples produce canonical JPEG frame artifacts. Their
-results are request-ordered and each frame keeps its requested source-global
-timestamp.
-
-`presentation: "panel"` adds a derived JPEG presentation. The panel contains
-the requested canonical frames in request order. It has no independent frame
-timestamps or evidence identity. Each panel cell links back to its canonical
-frame artifact. The exact-frame panel uses 320-pixel cells, a 180-pixel frame
-area, and a 32-pixel timestamp area; its maximum response dimensions are
-1280×636 for 12 cells.
-
-The panel is created only after all requested explicit frames succeed. A panel
-cache hit reuses the derived presentation; it does not change the canonical
-frame records.
-
-## Fixed-cadence schedules
-
-A cadence request defines `startMs`, `endMs`, and `cadenceMs`. Target `i` is
-computed from the original request:
-
-```text
-target(i) = startMs + i * cadenceMs
-```
-
-Targets are included while `target(i) < endMs`. The complete target count is
-checked before frame acquisition. The default page limit is 12 targets and the
-default schedule limit is 120 targets. A caller can lower either applicable
-limit; the server page limit cannot exceed 12.
-
-Each page retains the zero-based schedule index and one of these statuses:
-
-| Status | Meaning |
-| --- | --- |
-| `success` | The exact point was acquired and presented to the investigation. |
-| `error` | That target failed; the slot contains `code`, `retryable`, and `detail`. |
-| `unfinished` | Work for that target did not finish in the current page. |
-
-The requested timestamp remains the schedule target; it is not a measured
-presentation timestamp (PTS).
-
-Use the returned `nextCursor` as `cursor` to continue without a new `request`.
-Cadence cursors are valid only in the running server process that issued them;
-after a restart, begin the schedule again without a cursor.
-
-The cursor is opaque and signed; it is bound to the investigation, source
-snapshot, duration, frame representation, timeline and selection contracts,
-schedule definition, total target count, and next index. A cursor from another
-investigation, snapshot, or schedule is rejected.
-
-When `presentation: "panel"` is requested for a cadence page, Urma creates a
-derived panel only when every slot on that page is a terminal success. Error
-and unfinished slots remain visible in the page result and have no frame
-artifact.
-
-A cadence schedule is discrete point evidence. It says nothing about frames or
-events between its targets.
+Each inspection creates a new investigation. Later calls remain tied to its
+snapshot, even if another inspection refreshes the source. Caption reads and
+overviews are optional; a frame request can follow inspection directly.
 
 ## Caption evidence
 
-Caption tracks are source-provided. A track is identified by `trackRef` and
-also reports its language, kind, display name, and provider identifier when
-available. The supported kinds are `manual`, `automatic`, `sidecar`, and
-`unknown`.
+Urma uses source-provided captions and local sidecars. Supported formats are
+JSON3, WebVTT, and SRT. It does not transcribe audio, merge tracks, translate
+captions, or correct automatic captions.
 
-When the caller omits `trackRef`, Urma selects one track by this order:
+Both caption tools accept an optional `trackRef` from `inspect_video`. When
+omitted, Urma prefers manual captions, then local sidecars, automatic captions,
+and tracks of unknown kind. Within each kind it prefers the original language,
+then English, then stable lexical order. Responses identify the selected track
+and its language, kind, display name, and provider identifier when available.
 
-1. manual;
-2. local sidecar;
-3. automatic;
-4. unknown.
+If no usable track is available, the call fails with `CAPTIONS_UNAVAILABLE`.
+That differs from a successful search that returns no matches. Tracks marked
+`unknown` may be listed by inspection but cannot be acquired without a known
+origin.
 
-Within each kind, it prefers the source's original language, then English, then
-stable lexical order. A caller can select a specific track with a `trackRef`
-returned by `inspect_video`. A missing track is `CAPTIONS_UNAVAILABLE`; it is
-different from a complete search with zero hits.
+### `search_transcript`
 
-Urma parses JSON3, WebVTT, and SRT. It does not merge tracks, translate them,
-repair automatic captions, or infer speech that the source did not provide.
+Find a phrase in the selected caption track:
 
-### Search
+```json
+{
+  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
+  "query": "dark mode"
+}
+```
 
-`search_transcript` scans up to 10,000 segments of the selected track for a
-literal phrase or literal terms. The text and query are NFKC-normalized,
-lowercased, and cleaned so separators become spaces. Phrase mode checks for a
-normalized substring.
-Terms mode requires every normalized term to occur as a substring.
+| Argument | Required | Description |
+| --- | --- | --- |
+| `investigationRef` | Yes | Reference returned by inspection. |
+| `query` or `queries` | Yes | Exactly one query string, or an array of 1–20 query strings. Each query must contain non-whitespace text and be at most 256 characters. |
+| `trackRef` | No | Caption track to search. |
+| `mode` | No | `phrase` (default) or `terms`. |
+| `limit` | No | 1–20 results; default 5. For a batch, applies to each query before merging. |
 
-A single-query hit contains the matching cue and up to one preceding and one
-following cue as context. The matching cue is not duplicated in the MCP
-context projection.
-For a batch, each query is matched independently and overlapping spans are
-merged in timestamp order. A batch hit records the queries that matched it.
+Search normalizes Unicode with NFKC, ignores case, and treats separators as
+spaces. `phrase` finds a normalized substring. `terms` requires every
+normalized term to occur as a substring in the same cue. Matching is literal,
+without semantic ranking.
 
-Search scope is always `selected-caption-track`. It does not include audio,
-another caption track, translated captions, or unreturned provider data.
+A single-query hit includes the matching cue's text and timestamps, plus up to
+one preceding and one following cue as context. For several queries, use
+`queries` instead of `query`:
 
-### Read
+```json
+{
+  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
+  "queries": ["dark mode", "settings"],
+  "limit": 10
+}
+```
 
-`read_transcript` accepts a source-global half-open interval and returns
-segments that overlap that interval. One page contains at most 200 segments and
-16,000 caption characters. A partial page returns a cursor bound to its track
-and interval. Restarting with a different track or interval invalidates that
-cursor.
+Batch searches match each query independently, merge overlapping spans, and
+return hits in timestamp order. Each hit includes `matchedQueries`. A batch
+returns at most 20 merged hits and 16,000 caption characters.
 
-## Completeness and limits
+Search scans at most 10,000 segments per query and can stop earlier at its
+candidate limit. The result reports whether it found and returned every match:
 
-Search has a default result limit of 5 and a maximum of 20. It can inspect at
-most 10,000 caption segments while establishing candidates. Batched searches
-accept at most 20 queries, return at most 20 merged hits, and use a 16,000
-character result ceiling.
+| Field | Meaning |
+| --- | --- |
+| `candidateHitCount` | Number of candidates observed. |
+| `candidateCountComplete` | Whether the candidate count is complete. |
+| `omittedHits` | Exact number omitted when the count is complete; otherwise `null`. |
+| `partial` | `true` if the scan was incomplete or result limits omitted matches. |
 
-For a single query:
+`partial: false` means all matches under the selected track's matching rules
+were returned. A complete search with no hits means the track contained no
+matching cue. It does not rule out uncaptioned speech or a visual event.
 
-- `candidateHitCount` is the number of candidates observed;
-- `candidateCountComplete` says whether the bounded candidate scan finished;
-- `omittedHits` is the exact number omitted by the result limit only when the
-  candidate count is complete; and
-- `partial` is true when the scan stopped early or a result ceiling omitted a
-  candidate.
+### `read_transcript`
 
-For a batch, `candidateCountComplete` is false when any query's bounded scan or
-per-query limit prevents a complete candidate count. In that case,
-`omittedHits` is `null`.
+Read captions overlapping a time range:
 
-`partial: false` means Urma established the eligible result set under the
-applicable limits and returned it within the requested result limit. A complete
-zero-match result means no matching cue was found in the selected track under
-the matching rules. It does not establish that the phrase is absent from the
-audio or video.
+```json
+{
+  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
+  "startMs": 10000,
+  "endMs": 20000
+}
+```
 
-`read_transcript` uses `partial` to indicate that more overlapping caption
-segments remain in the requested interval. A returned `nextCursor` identifies
-the continuation point.
+| Argument | Required | Description |
+| --- | --- | --- |
+| `investigationRef` | Yes | Reference returned by inspection. |
+| `startMs`, `endMs` | Yes | Half-open time range to read. |
+| `trackRef` | No | Caption track to read. |
+| `cursor` | No | `nextCursor` from a previous page with the same investigation, range, and track. |
+
+The result includes `requestedRange`, `returnedRange`, the selected `track`,
+and timestamped `segments`. Overlapping cues retain their full timestamps, so
+`returnedRange` can extend beyond the requested range.
+
+A page contains at most 200 segments or 16,000 caption characters. If more
+segments remain, `partial` is `true` and `nextCursor` identifies the next page.
+Repeat the original arguments with that cursor:
+
+```json
+{
+  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
+  "startMs": 10000,
+  "endMs": 20000,
+  "cursor": "<nextCursor>"
+}
+```
+
+Replace `<nextCursor>` with the returned value. If you selected `trackRef`,
+include it again. A cursor cannot be reused for another range or track.
+
+## Overview semantics
+
+### `get_overview`
+
+Get a visual overview of a time range:
+
+```json
+{
+  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
+  "startMs": 10000,
+  "endMs": 30000
+}
+```
+
+`investigationRef` is required. `startMs` defaults to `0` and `endMs` defaults
+to the source duration; omit both for the whole video.
+
+Urma requests 12 temporally distributed points. A short interval can produce
+fewer distinct samples. It prefers a source's native storyboard and otherwise
+decodes a copy of the video for navigation.
+
+The response includes an image panel, its resource link, and a `cells` array
+with each sample's timestamp and provenance. `requestedInterval` records the
+range requested. `observedCoverage.sampleTimestampsMs` records the returned
+samples, and `adjacentSpacingMs` records the gaps between them. Coverage is
+`sample-points-only`, with `continuous: false`.
+
+Current overview timestamps are nominal sample times. An overview is useful
+for finding a likely scene; requesting exact frames at its timestamps is a
+separate operation. Cell spacing does not guarantee observation of the video
+between those cells.
+
+Repeated overviews report their relationship in `sampling.sampleReuse`:
+
+| `relation` | Meaning |
+| --- | --- |
+| `not-scoped` | Whole-source overview. |
+| `no-prior-overview` | No comparable overview has been presented in this investigation. |
+| `same-samples` | The underlying samples match an earlier overview. |
+| `different-subset` | A scoped storyboard selected another subset of the same underlying samples. |
+| `new-decoded-samples` | Navigation media produced a new set of decoded samples. |
+
+`reusedUnderlyingSamples` concerns the images themselves. Reusing downloaded
+media alone does not mean an overview shows the same samples.
+
+## Exact frames and panels
+
+### `get_frames`
+
+Request specific timestamps:
+
+```json
+{
+  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
+  "request": { "kind": "points", "timesMs": [10000, 11000] }
+}
+```
+
+Or request evenly spaced samples from an interval:
+
+```json
+{
+  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
+  "request": { "kind": "burst", "startMs": 10000, "endMs": 12000, "count": 4 },
+  "presentation": "panel"
+}
+```
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `investigationRef` | Yes | Reference returned by inspection. |
+| `request` | Yes, for a new request | A `points`, `burst`, or `cadence` request. |
+| `presentation` | No | `individual` (default) or `panel`. |
+| `cursor` | For cadence continuation | Returned `nextCursor`; omit `request` when using it. |
+| `pageSize` | No; cadence only | Targets per page, up to the configured server maximum. |
+| `maxTargets` | No; cadence only | Caller limit on the total schedule size, subject to the server limit. |
+
+`points` accepts 1–12 unique timestamps and preserves their request order.
+`burst` accepts a half-open interval and `count` from 2 to 12, returning its
+samples in time order. [Cadence requests](#fixed-cadence-schedules) can span
+several pages.
+
+Urma selects the first decodable presentation frame at or after each requested
+time. A target need not coincide with a video's frame boundary. Returned
+`atMs`, `timestampMs`, and `requestedAtMs` values record the requested times;
+they are not measured decoder presentation timestamps.
+
+With `individual`, the result contains each JPEG and its resource link. With
+`panel`, the result contains one combined JPEG with timestamp labels and links
+to the individual frame artifacts. A panel preserves request order and is
+created only after all requested explicit frames succeed.
+
+## Fixed-cadence schedules
+
+To sample once per second over 30 seconds:
+
+```json
+{
+  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
+  "request": { "kind": "cadence", "startMs": 0, "endMs": 30000, "cadenceMs": 1000 },
+  "pageSize": 12
+}
+```
+
+`cadenceMs` must be a positive integer. Targets are `startMs + i * cadenceMs`
+for zero-based index `i`, while the target is earlier than `endMs`. This example
+has 30 targets, from 0 through 29 seconds. Urma checks the total count before
+acquiring frames.
+
+The default server limits are 12 targets per page and 120 per schedule. Set
+`pageSize` or `maxTargets` to impose smaller limits. Server limits are
+[configurable](../README.md#acquisition-limits), but pages cannot exceed 12.
+
+Each page reports the schedule, page indexes, slots, status counts,
+`scheduleComplete`, and `nextCursor`. Slots retain their zero-based schedule
+index and requested timestamp:
+
+| Status | Meaning |
+| --- | --- |
+| `success` | The frame was acquired and returned. |
+| `error` | The target failed; `error` contains `code`, `retryable`, and `detail`. |
+| `unfinished` | Work for that target did not finish in this page. |
+
+To continue, pass the investigation and returned cursor without a new request:
+
+```json
+{
+  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
+  "cursor": "<nextCursor>"
+}
+```
+
+Include `presentation: "panel"` on each call if you want panels. A cadence page
+gets a panel only when every slot on that page succeeds. Error and unfinished
+slots remain visible in the result and have no frame artifact.
+
+Cursors are signed for the running server process. A cursor from another
+investigation or incompatible snapshot is rejected. After a server restart,
+start again with the original cadence request.
+
+A cadence schedule observes discrete moments. Even a completed schedule can
+miss events between targets.
 
 ## Resources and state
 
-Successful tool results include resource links for presented artifacts. The
-artifact template is:
+Successful results provide resource links for saved artifacts. Their URI form
+is:
 
 ```text
 urma://investigation/<investigationId>/artifact/<artifactHash>
 ```
 
-The artifact must have been presented to that investigation. A resource read
-reopens the same validated bytes; it does not create a presentation or expand
-coverage. A panel resource and its canonical frame resources therefore remain
-distinct.
+An artifact is readable only after it has been returned to that investigation.
+Reading the resource returns the same validated bytes. It does not acquire
+more frames or add observations. A panel and its individual frames have
+separate resources. Missing or corrupt artifacts fail to read; resource reads
+do not reacquire them.
 
-The state template is:
+Each tool also returns `stateResource`, with this URI form:
 
 ```text
 urma://investigation/<investigationId>/state
 ```
 
-It is derived from persisted source, acquisition, cache, artifact, and
-presentation records. Tool responses provide its URI as `stateResource`.
-A state resource larger than the configured byte ceiling fails to read rather
-than returning truncated JSON.
+It reports the investigation's saved source, acquisition, cache, artifact,
+and presentation state. Source data can be cached across investigations,
+while each investigation records its own returned evidence. A state resource
+that exceeds the 32 MiB read limit fails rather than returning truncated JSON.
 
-## What these results do not prove
+## Errors
 
-- A caption miss does not prove that the words were not spoken.
-- A caption hit does not prove that the corresponding visual event occurred.
-- A sparse overview does not establish continuous scene coverage.
-- A burst does not establish continuous motion between points.
-- A cadence schedule does not establish coverage between targets.
-- A requested timestamp does not by itself identify the decoder's presentation
-  PTS.
-- Cached or authorized content does not add new temporal coverage when it is
-  reopened.
+Tool execution failures return `isError: true` with a JSON text object
+containing `code`, `retryable`, and `detail`. Cadence requests can report a
+failure in one slot while returning successful frames for others.
 
-These tools do not establish exhaustive event counts. A host making such a
-claim needs evidence for unsampled intervals and a way to distinguish repeated
-observations from separate events.
+Common conditions include disabled local access (`LOCAL_SOURCE_DISABLED`), a
+file outside configured roots (`LOCAL_PATH_OUTSIDE_ROOT`), unavailable captions
+(`CAPTIONS_UNAVAILABLE`), and an exceeded output limit (`OUTPUT_LIMIT_EXCEEDED`).
+Check the error detail and the [configuration](../README.md#configuration)
+before retrying. For installation or runtime problems, run
+[doctor](../README.md#cli-and-maintenance).

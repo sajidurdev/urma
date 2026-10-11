@@ -4,8 +4,6 @@
   <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/assets/urma-banner.png" alt="Urma" width="100%" />
   <br /><br />
   <strong>Retrieve video captions and frames through MCP.</strong>
-  <br />
-  A stdio MCP server for bounded caption and visual evidence.
   <br /><br />
   <a href="#try-urma">Try Urma</a>
   ·
@@ -22,91 +20,83 @@
 
 <br />
 
-Urma retrieves captions and sampled frames from videos with a known end time.
-Each result identifies its source snapshot and requested timestamps or range.
-The host chooses what to retrieve, interprets the results, and decides how to
-process or send the evidence to a model.
+Urma gives MCP clients access to captions and frames from public video URLs
+and local video files. Search captions for a topic, browse a visual overview,
+or retrieve frames at specific timestamps.
 
-Urma runs locally and stores its cache on your filesystem. Remote videos still
-require network access.
-
-The server uses MCP stdio. A host starts one Urma process for a session and
-owns its lifecycle. Urma does not run a daemon or expose an HTTP API.
-
-## Requirements
-
-- Native Node.js `>=22.16.0 <23`, `>=24.0.0 <25`, or `>=26.0.0 <27`.
-- A user-owned local filesystem with at least 1 GiB free for Urma's data root.
-- One of these runtime targets: Windows x64 or arm64, macOS x64 or arm64, or
-  Linux x64 or arm64 with glibc.
-
-Urma installs the pinned FFmpeg, ffprobe, and yt-dlp artifacts it needs. Do
-not install those tools separately for the packaged runtime. Urma does not
-install or manage Node.js.
+Urma runs locally and keeps its cache on your filesystem. Your MCP client
+starts the server over stdio and receives the requested text and images.
+Remote videos require network access.
 
 ## Try Urma
 
-1. Install Urma with `npx -y urma-mcp@latest setup`.
-2. [Register your MCP host](#register-a-generic-json-host), then restart it.
-3. Give the host a video URL or allowed local path and ask it to locate a moment
-   using captions or an overview.
-4. Request exact frames around that moment to verify the visual claim.
+1. Install with `npx -y urma-mcp@latest setup`.
+2. [Connect your MCP client](#register-a-generic-json-host) and restart it.
+3. Give the client a video URL and a question about the video.
 
-Example prompt (replace `<video URL>` with your source):
+For example, replace `<video URL>` in this prompt with a public product demo:
 
-> Inspect this product-demo video: `<video URL>`. Use captions to find where the presenter
-> mentions dark mode, use the overview to locate the settings screen, then
-> request exact frames around that timestamp to verify whether the dark-mode
-> toggle is enabled. If the returned frames do not show the toggle clearly,
-> say that the evidence is insufficient.
+> In this demo, where does the presenter discuss dark mode, and is the toggle
+> enabled on screen? `<video URL>`
+
+For a local file, [allow its directory](#local-videos) first. See
+[supported sources](docs/PRODUCT_SCOPE.md#source-admission) for provider and
+format limitations.
 
 ## Install and connect a host
 
-### Install the runtime
+### Requirements
 
-Run the npm bootstrap with a supported Node.js version:
+- Native Node.js `>=22.16.0 <23`, `>=24.0.0 <25`, or `>=26.0.0 <27`.
+- Windows x64/arm64, macOS x64/arm64, or Linux x64/arm64 with glibc.
+- A user-owned local directory with at least 1 GiB free for the installation.
+
+Setup installs the required versions of FFmpeg, ffprobe, and yt-dlp. You only
+need to install Node.js yourself.
+
+### Install the runtime
 
 ```sh
 npx -y urma-mcp@latest setup
 ```
 
-For a repeatable install, pin the package version:
+Setup downloads and verifies the native tools, tests the installed server, and
+prints the paths needed by your MCP client. Updates are installed separately
+from the current runtime; a failed update leaves the current installation
+selected.
+
+For a repeatable installation, pin the package version:
 
 ```sh
 npx -y urma-mcp@0.1.0 setup
 ```
 
-Setup downloads and verifies the pinned native tools, checks that the installed
-runtime can serve MCP requests, and selects the new installation for future
-launches. Each installation is stored in a separate directory called a
-generation. If setup fails during an update, the previously active generation
-remains selected.
+Urma uses these default data directories:
 
-The default data roots are:
-
-| Platform | Root |
+| Platform | Directory |
 | --- | --- |
 | Windows | `%LOCALAPPDATA%\Urma` |
 | macOS | `~/Library/Application Support/Urma` |
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/urma` |
 
-Use `--data-dir PATH` with `setup`, or set `URMA_DATA_DIR`, to select another
-user-owned local directory. Network and UNC paths are outside the supported
-installation boundary.
+To choose another directory, pass `--data-dir PATH` to setup or set
+`URMA_DATA_DIR`. The data directory must be on a user-owned local filesystem;
+network and UNC locations are unsupported.
 
 ### Register a generic JSON host
 
-If the host uses the usual `mcpServers` JSON shape, setup can add or update the
-`urma` entry and preserve other entries. For an existing `urma` object, setup
-replaces `command`, `args`, and `env.URMA_DATA_DIR` while preserving other host
-options and environment values:
+For clients that use an `mcpServers` JSON configuration, setup can write the
+entry for you:
 
 ```sh
 npx -y urma-mcp@latest setup --client generic --config "/absolute/path/to/mcp.json"
 ```
 
-The configuration file path must be absolute. The resulting entry has this
-shape; use the absolute paths printed by setup:
+The configuration path must be absolute. Setup preserves unrelated entries.
+If an `urma` entry already exists, setup updates `command`, `args`, and
+`env.URMA_DATA_DIR`, leaving its other settings in place.
+
+To configure a client manually, use the absolute paths printed by setup:
 
 ```json
 {
@@ -122,248 +112,195 @@ shape; use the absolute paths printed by setup:
 }
 ```
 
-On Windows, use the path escaping required by JSON. The `command` and the
-launcher path must be absolute. The launcher selects the installed generation
-and starts the local Urma runtime; use the npm package only for setup and
-version checks.
+On Windows, escape backslashes in JSON, for example `C:\\Users\\you\\AppData\\Local\\Urma`.
+For clients with a different configuration format, use the same Node
+executable, launcher, and environment settings in a stdio server entry.
 
-Host registration and runtime installation are reported separately. A healthy
-runtime can be left installed when the configuration file cannot be written.
-After registration, restart the host and check that it lists the [five tools](#tools).
+Restart the client after saving the configuration. It should list the five
+tools below. If registration fails, setup reports that separately from the
+runtime installation; you can still configure the installed server manually.
 
-For a host with a different configuration format, create the equivalent
-stdio entry with the same absolute Node executable, launcher path, and
-`URMA_DATA_DIR` value.
+## Tools
 
-## Using Urma
-
-### Tools
-
-| Tool | Returns |
+| Tool | Use it to |
 | --- | --- |
-| `inspect_video` | A source snapshot and a new investigation reference. |
-| `search_transcript` | Literal matches in one selected caption track. |
-| `read_transcript` | Timestamped caption segments in a bounded interval. |
-| `get_overview` | A visual overview with up to 12 sampled cells. |
-| `get_frames` | Exact JPEG points, ordered sparse points, or a fixed-cadence schedule. |
+| `inspect_video` | Open a video and list its duration, metadata, and caption tracks. |
+| `search_transcript` | Find literal phrases or terms in a caption track. |
+| `read_transcript` | Read timestamped captions for a time range. |
+| `get_overview` | Browse up to 12 visual samples from a video or time range. |
+| `get_frames` | Retrieve JPEG frames at chosen times, in a burst, or at a fixed interval. |
 
-Call `inspect_video` for a new source, then use its `investigationRef` for each
-evidence request. A typical search starts with captions or an overview to find
-a time range, then uses `get_frames` to check selected moments.
-
-### Source and caption inputs
-
-`inspect_video` accepts a policy-approved HTTP(S) source, a local path under
-`URMA_LOCAL_ROOTS`, or a returned `sourceRef`. By default,
-`freshness: "reuse"` reuses a remote snapshot; local files and sidecars are
-checked again. Use `freshness: "refresh"` to resolve the source again. Local
-`.vtt` and `.srt` sidecars are supported. See
-[Product scope](docs/PRODUCT_SCOPE.md#source-admission) for supported sources.
-The [Evidence Model](docs/EVIDENCE_MODEL.md) covers caption-track selection,
-search, and pagination.
-
-Caption search and reads use one source-provided track; Urma does not
-transcribe speech. For search, `partial: false` means all matches under that
-track's matching rules were returned. It says nothing about uncaptioned speech
-or visual events. A caption match can locate a moment to verify with frames.
-
-### Visual inputs
-
-`get_overview` returns up to 12 sparse locator samples. `get_frames` supports
-explicit points, ordered bursts, and paged cadence schedules. The
-[Evidence Model](docs/EVIDENCE_MODEL.md) defines request bounds, panel output,
-pagination, and the limits of each result. Sampled frames describe only the
-returned points; they do not establish coverage between them.
-
-### Example tool arguments
-
-For a local video, first add its parent directory to `URMA_LOCAL_ROOTS` in the
-host's Urma environment and restart the host. Call `inspect_video` with the
-absolute path to your file:
+Start with `inspect_video`. For an allowed local file, its arguments are:
 
 ```json
-{ "source": "/absolute/path/to/video.mp4" }
+{ "source": "/absolute/path/to/demo.mp4" }
 ```
 
-Use the returned `investigationRef` in subsequent calls. For example, these
-`get_frames` arguments request a panel at 1 and 5 seconds from a video longer
-than 5 seconds. Replace the example reference with the value from inspection:
+Use the returned `investigationRef` for subsequent calls. For example, these
+`search_transcript` arguments find mentions of dark mode:
 
 ```json
 {
   "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
-  "request": { "kind": "points", "timesMs": [1000, 5000] },
+  "query": "dark mode"
+}
+```
+
+Replace the example reference with the one from inspection. If a match occurs
+near 10 seconds, these `get_frames` arguments request a panel at 10 and 11
+seconds from a video longer than 11 seconds:
+
+```json
+{
+  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
+  "request": { "kind": "points", "timesMs": [10000, 11000] },
   "presentation": "panel"
 }
 ```
 
-To continue a cadence page, pass `investigationRef` and the returned
-`nextCursor` as `cursor`, without a new `request`.
+All times are integer milliseconds from the start of the video. Caption
+search uses source-provided captions; Urma does not transcribe audio. Overviews
+and frame requests show selected moments, so brief events between samples can
+be missed.
 
-### Resources and errors
+The [tool reference](docs/EVIDENCE_MODEL.md) covers all arguments, pagination,
+result fields, and timing guarantees.
 
-Successful evidence results include resource links for artifacts already
-presented to that investigation. Reopening an artifact does not add temporal
-coverage. The state resource exposes persisted acquisition and presentation
-state. See the [Evidence Model](docs/EVIDENCE_MODEL.md#resources-and-state) for
-resource templates and authorization rules.
+## Configuration
 
-Top-level MCP failures return `isError: true` with a JSON text object
-containing `code`, `retryable`, and `detail`. A cadence page can report a failed
-slot while continuing with other targets.
+Set environment variables in the client's Urma `env` entry and restart the
+client after changing them.
 
-## Configuration and troubleshooting
+### Local videos
 
-### Limits
+Local file access is disabled by default. Set `URMA_LOCAL_ROOTS` to the
+directories that Urma may read. Use absolute paths, separated by `;` on
+Windows or `:` on macOS/Linux. For example:
 
-Runtime defaults are:
+```json
+{
+  "URMA_LOCAL_ROOTS": "/home/you/Videos:/home/you/Demos"
+}
+```
 
-| Limit | Default |
-| --- | ---: |
-| Single caption search result limit | 5, maximum 20 |
-| Caption query length | 256 characters |
-| Batched caption queries | 20 queries, 20 merged hits, 16,000 returned characters |
-| Caption read page | 200 segments or 16,000 characters |
-| Overview request | 12 requested cells |
-| Explicit frame request | 12 points or burst samples |
-| Cadence page | 12 targets |
-| Cadence schedule | 120 targets |
-| Inline image response | 8 MiB |
-| Resource read | 32 MiB |
-| Targeted media acquisition | 64 MiB |
-| Navigation media acquisition | 256 MiB |
-| Reusable evidence media | 512 MiB |
-| Remote acquisition wall time | 180,000 ms |
+This example is an `env` fragment for macOS/Linux. On Windows, a single root
+might be `"URMA_LOCAL_ROOTS": "C:\\Users\\you\\Videos"`.
 
-The environment variables below override the tunable limits. Values for byte
-limits are bytes; the remote wall limit is milliseconds. Each value must be a
-positive integer. `URMA_MAX_FRAME_SCHEDULE_PAGE_TARGETS` cannot exceed 12.
-
-| Variable | Overrides |
-| --- | --- |
-| `URMA_MAX_TARGETED_MEDIA_BYTES` | Targeted media limit. |
-| `URMA_MAX_NAVIGATION_COPY_BYTES` | Navigation media and timeline-validation limit. |
-| `URMA_MAX_REUSABLE_EVIDENCE_MEDIA_BYTES` | Reusable evidence media limit. |
-| `URMA_MAX_REMOTE_ACQUISITION_WALL_MS` | Remote acquisition wall-time limit. |
-| `URMA_MAX_FRAME_SCHEDULE_PAGE_TARGETS` | Cadence page limit. |
-| `URMA_MAX_FRAME_SCHEDULE_TARGETS` | Cadence schedule limit. |
-
-### Configuration
+Urma looks for captions beside the video: `demo.vtt` first, then `demo.srt` for
+`demo.mp4`. Sidecars must also be inside an allowed root. Symlinks and junctions
+are checked against their resolved locations.
 
 | Variable | Purpose |
 | --- | --- |
-| `URMA_DATA_DIR` | Selects the persistent Urma data root. |
-| `URMA_LOCAL_ROOTS` | Platform-delimited list of roots allowed for local videos and sidecars. |
-| `URMA_ALLOW_UNC` | Allows UNC video and sidecar inputs when set to `1` or `true`; allowed-root checks still apply. |
-| `URMA_DEBUG` | Writes opt-in acquisition and subprocess diagnostics to stderr when set to `1` or `true`. |
-| `URMA_DEBUG_FILE` | Appends diagnostics to a JSONL file when `URMA_DEBUG` is enabled. |
+| `URMA_DATA_DIR` | Installation, database, and cache directory. |
+| `URMA_LOCAL_ROOTS` | Directories allowed for local videos and caption sidecars. |
+| `URMA_ALLOW_UNC` | Set to `1` or `true` to allow UNC video inputs under an allowed root. This does not allow a UNC data directory. |
+| `URMA_DEBUG` | Set to `1` or `true` to write diagnostic logs to stderr. |
+| `URMA_DEBUG_FILE` | Append diagnostic logs to a JSONL file when debugging is enabled. |
 
-Set these variables in the host's Urma `env` entry, then restart the host.
-Separate local roots with `;` on Windows and `:` on macOS/Linux. Use absolute
-paths so root selection does not depend on the host's working directory.
+### Acquisition limits
 
-The packaged launcher uses the selected generation's absolute native-tool
-paths. It does not look up FFmpeg, ffprobe, or yt-dlp through `PATH`.
+These limits bound downloads and frame schedules. Override them with positive
+integer values; byte limits use bytes and the timeout uses milliseconds.
 
-### CLI and maintenance
+| Variable | Default |
+| --- | ---: |
+| `URMA_MAX_TARGETED_MEDIA_BYTES` | 67,108,864 (64 MiB) |
+| `URMA_MAX_NAVIGATION_COPY_BYTES` | 268,435,456 (256 MiB); also used for timeline validation |
+| `URMA_MAX_REUSABLE_EVIDENCE_MEDIA_BYTES` | 536,870,912 (512 MiB) |
+| `URMA_MAX_REMOTE_ACQUISITION_WALL_MS` | 180,000 (3 minutes) |
+| `URMA_MAX_FRAME_SCHEDULE_PAGE_TARGETS` | 12; cannot be increased above 12 |
+| `URMA_MAX_FRAME_SCHEDULE_TARGETS` | 120 |
 
-The npm entry point exposes setup and version checks:
+Inline image responses have a fixed 8 MiB ceiling, and resource reads have a
+fixed 32 MiB ceiling. Tool-specific caption and sampling limits are listed in
+the [tool reference](docs/EVIDENCE_MODEL.md).
+
+## CLI and maintenance
+
+Run setup again to update Urma. Restart the MCP client to use the new
+installation; an already running server keeps its current version.
+
+The npm version command reports the package selected by the tag:
 
 ```sh
 npx -y urma-mcp@latest --version
-npx -y urma-mcp@latest setup
 ```
 
-The `npx` version command reports the npm package's version, not the installed
-generation. To check the installed generation, use the Node and launcher paths
-printed by setup.
-
-Before using launcher `--version`, `doctor`, `rollback`, or `recover`, set
-`URMA_DATA_DIR` if setup used a custom data root.
+To check the installed version or diagnose a problem, use the Node and launcher
+paths printed by setup. If setup used a custom data directory, set
+`URMA_DATA_DIR` to that directory before running launcher commands:
 
 ```sh
 "/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" --version
-```
-
-After setup, run the read-only doctor through the persistent launcher:
-
-```sh
 "/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" doctor
 ```
 
-In PowerShell, prefix the quoted executable path with `&`:
+In PowerShell, prefix a quoted executable path with `&`:
 
 ```powershell
 & "C:\path\to\node.exe" "C:\path\to\Urma\launcher-v1.mjs" doctor
 ```
 
-Doctor checks the selected runtime, Node version, SQLite, native-tool
-versions, storage, blob access, local roots, and frame-schedule limits. It
-prints its report to stderr and exits with status 0 when no check fails
-(warnings are allowed), or 1 when a check fails.
+Doctor checks the runtime, native tools, storage, local roots, and configured
+limits without changing the installation. Its report goes to stderr. Exit
+status `0` means no check failed, although warnings may remain; `1` means at
+least one check failed. Use the same `URMA_DATA_DIR`, `URMA_LOCAL_ROOTS`, and
+other Urma settings as your MCP client.
 
-To diagnose host behavior, use the host's `URMA_LOCAL_ROOTS` and other Urma
-settings. If setup did not complete, report its error instead.
-
-The launcher also provides local generation recovery:
+If an update causes problems, the launcher provides two recovery commands:
 
 ```sh
 "/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" rollback
 "/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" recover
 ```
 
-`rollback` selects the retained previous generation after integrity and state
-compatibility checks. `recover` restores the selection recorded in
-`ACTIVE.backup.json`.
-
-Normal MCP startup selects one generation for the process. It does not invoke
-npm, make a network request, check for updates, modify `PATH`, or download
-dependencies. A later setup affects new processes only.
-
-## Boundaries
-
-Urma v0.1 does not transcribe audio, recognize objects or actions, or call a
-model. It supports finite videos without authentication or DRM. See
-[Product scope](docs/PRODUCT_SCOPE.md) for supported sources and exclusions.
-
-## Security
-
-Local paths require explicit allowed roots. Remote HTTP(S) requests validate
-destinations and DNS results before connecting. Installed native tools are
-hash-checked before first use.
-
-Urma relies on trusted Node.js, FFmpeg, ffprobe, and yt-dlp binaries. Its
-controls do not provide an operating-system sandbox against a compromised
-executable.
-
-See [Security](docs/SECURITY.md) for the full boundary and failure behavior.
-
-## Development
-
-See the [contribution guide](docs/CONTRIBUTING.md) for development setup,
-test commands, and pull request expectations.
+`rollback` selects the retained previous installation after integrity and
+state-compatibility checks. `recover` restores the installation selection
+saved in `ACTIVE.backup.json`. Restart the MCP client afterward.
 
 ## Reporting problems
 
-Report installation, MCP host, or source/provider problems using the
-[bug report template](https://github.com/sajidurdev/urma/issues/new?template=bug-report.md).
-Include reproduction steps and relevant [doctor output](#cli-and-maintenance)
-if setup completed; otherwise include the setup error. Remove credentials,
-private URLs, and personal paths before posting logs.
+Use the [bug-report template](https://github.com/sajidurdev/urma/issues/new?template=bug-report.md).
+Include reproduction steps, your OS and architecture, Node.js and MCP client
+versions, and the installed Urma version. For source-specific problems,
+include a public URL or describe a local file that reproduces the failure.
 
-## License
+Include doctor output if setup completed, or the setup error if it did not.
+Remove credentials, private URLs, and personal paths before posting logs.
 
-Urma is licensed under [Apache License 2.0](LICENSE). Third-party dependencies
-and downloaded native tools retain their own licenses. The installed
-generation's `licenses/` directory records native component licenses and
-upstream references; preserve the accompanying upstream notices when
-redistributing those tools. Urma's license does not grant rights to videos or
-captions retrieved from other sources.
+## Security
+
+Urma restricts local files to configured roots, validates remote destinations,
+and verifies its managed native tools. It is intended for one trusted local
+user. See [Security](docs/SECURITY.md) for the controls, assumptions, and MCP
+integration considerations.
+
+## Development
+
+From the repository root, using Node.js 24 and the pnpm version in
+`package.json`:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm check
+```
+
+See [Contributing](docs/CONTRIBUTING.md) for native-tool prerequisites, code
+structure, and validation commands.
 
 ## Documentation
 
-- [Product scope](docs/PRODUCT_SCOPE.md) — current v0.1 behavior and exclusions.
-- [Architecture](docs/ARCHITECTURE.md) — runtime layers, persistence, caching, and acquisition decisions.
-- [Evidence Model](docs/EVIDENCE_MODEL.md) — what each result means and what it cannot establish.
-- [Security](docs/SECURITY.md) — path, network, subprocess, installation, and cache controls.
-- [Contributing](docs/CONTRIBUTING.md) — local setup, validation commands, and change expectations.
+- [Product scope](docs/PRODUCT_SCOPE.md): supported sources and limitations.
+- [Tool reference](docs/EVIDENCE_MODEL.md): arguments, results, and examples.
+- [Architecture](docs/ARCHITECTURE.md): source snapshots, acquisition, caching, and installation design.
+- [Security](docs/SECURITY.md): filesystem, network, subprocess, and resource boundaries.
+- [Contributing](docs/CONTRIBUTING.md): development setup and contribution guidelines.
+
+## License
+
+Urma is licensed under [Apache License 2.0](LICENSE). Dependencies and downloaded
+native tools retain their own licenses. The installed runtime's `licenses/`
+directory contains native component licenses and upstream references; preserve
+their notices when redistributing those tools. Urma's license does not grant
+rights to retrieved videos or captions.

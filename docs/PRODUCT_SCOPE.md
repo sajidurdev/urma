@@ -4,89 +4,66 @@
   <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/docs/assets/product-scope.png" alt="Urma product scope" width="100%" />
 </p>
 
-Urma is a local MCP server for retrieving captions and frames from videos. It
-resolves a source, pins a finite timeline, acquires source-provided captions or
-video, validates the result, and records provenance for each investigation.
+Urma retrieves captions and selected frames from finite videos through MCP.
+It supports caption search, caption reads, visual overviews, and frame requests
+at specific times. The [tool reference](EVIDENCE_MODEL.md) describes those
+operations, and the [README](../README.md) covers installation.
 
-The MCP host chooses requests, interprets the returned evidence, and decides
-whether it supports a conclusion.
+## Source admission
 
-## Included in v0.1
+### Remote videos
 
-### Source admission
+Urma uses yt-dlp to resolve public video URLs. A source must resolve to one
+video with a positive, finite duration. Supported media forms include
+progressive files, finite HLS playlists, and static DASH timelines.
 
-Urma uses yt-dlp to resolve public, finite, non-DRM video URLs. Compatibility
-checks cover public fixtures from X / Twitter, Facebook Reel, Instagram Reel,
-Loom, Streamable, and Mux-hosted public HLS. Other providers, including YouTube,
-are best effort; yt-dlp support alone does not guarantee that Urma can inspect
-a video.
+Compatibility checks cover public fixtures from X / Twitter,
+Facebook Reel, Instagram Reel, Loom, Streamable, and Mux-hosted HLS. This is
+fixture-based coverage; provider access and delivery formats can change.
 
-Urma accepts:
+Other providers, including YouTube single-video URLs, are best effort. yt-dlp
+support by itself does not guarantee that Urma can inspect or retrieve frames
+from a source.
 
-- HTTP(S) remote video sources that pass the versioned remote policy and finite
-  timeline validation.
-- Local video files whose canonical paths are inside a root listed in
-  `URMA_LOCAL_ROOTS`.
-- Local `.vtt` or `.srt` caption sidecars. When both exist for a local video,
-  the `.vtt` sidecar is selected first.
+Urma rejects live and upcoming streams, playlists and other multi-video
+results, private videos, sources requiring login or payment, and DRM-protected
+media. Remote URLs must use HTTP or HTTPS on the default port, without embedded
+credentials, and pass the [network checks](SECURITY.md#remote-url-and-network-boundary).
 
-Remote sources must resolve to one video with a positive finite duration. The
-implementation validates progressive/container media, finite HLS media
-playlists, and static finite DASH timelines. Multi-entry, live, upcoming,
-private, login-required, paywalled, and DRM-protected sources are rejected.
+### Local videos
 
-### Evidence acquisition
+Local videos must be regular files inside a directory allowed by
+`URMA_LOCAL_ROOTS`. Access is disabled when no roots are configured. Resolved
+symlink and junction targets must also remain inside an allowed root.
 
-- `inspect_video` creates an investigation pinned to one source snapshot.
-- `search_transcript` performs bounded literal phrase or term matching on one
-  selected caption track.
-- `read_transcript` returns timestamped caption segments from a bounded
-  source-global interval.
-- `get_overview` returns a sparse visual locator with up to 12 cells for the
-  whole source or a validated interval.
-- `get_frames` returns exact JPEG points, ordered sparse burst points, or a
-  paged fixed-cadence set of exact point requests.
-- Investigation-scoped MCP resources reopen presented artifacts and expose
-  persisted investigation state.
+For a video such as `demo.mp4`, Urma checks for `demo.vtt`, then `demo.srt` in
+the same directory. The selected sidecar uses the same access checks as the
+video. UNC inputs require `URMA_ALLOW_UNC` as well as an allowed root.
 
-The public MCP surface does not expose audio evidence. Urma does not infer
-speech from a video that has no supported caption track.
+## Captions and visual results
 
-### Distribution and persistence
+Captions come from the source or a local sidecar. Urma does not transcribe
+audio, translate captions, or repair automatic captions. Search performs
+literal phrase or term matching in one selected track; it does not use
+semantic search.
 
-- npm bootstrap through `urma-mcp`.
-- Native Node.js `>=22.16.0 <23`, `>=24.0.0 <25`, or `>=26.0.0 <27`.
-- Supported targets: Windows x64/arm64, macOS x64/arm64, and Linux x64/arm64
-  with glibc.
-- Generation-local FFmpeg, ffprobe, and yt-dlp supplied by the release
-  manifest.
-- Immutable installation generations with a receipt and an atomic active
-  selector.
-- SQLite state and a content-addressed blob store under the user-selected
-  local data root.
-- MCP stdio, read-only doctor checks, and local generation rollback/recovery.
+Overviews contain up to 12 visual samples. Frame requests return JPEGs at
+chosen times, as an ordered burst, or as a paged fixed-cadence schedule.
+Sampling can miss events between frames. Urma does not run OCR, object or
+action recognition, or model-based video analysis.
 
-## Excluded from v0.1
+## Runtime and storage
 
-Urma v0.1 does not include:
+Urma runs as a local stdio MCP server on native Node.js 22.16+ (22.x), 24.x,
+or 26.x. Supported platforms are Windows x64/arm64, macOS x64/arm64, and Linux
+x64/arm64 with glibc. Setup supplies the required FFmpeg, ffprobe, and yt-dlp
+versions.
 
-- speech-to-text or other audio transcription;
-- OCR, object recognition, action recognition, optical-flow analysis, learned
-  scene understanding, or visual-language model calls;
-- embeddings, vector search, RAG, semantic ranking, similarity search, or
-  automatic evidence selection;
-- internal LLM calls, agents, planners, or answer summarization;
-- continuous video streaming, live or upcoming streams, playlist or collection
-  selection, or multi-entry source handling;
-- login, private, subscription-only, paywalled, or DRM-protected media;
-- comments, social-platform data, arbitrary HTTP serving, accounts, workspaces,
-  collections, or dashboards;
-- cloud synchronization, hosted multi-tenant isolation, external databases, or
-  background indexing;
-- persistent telemetry or analytics;
-- a Node.js installer, system package manager, Docker runtime, PATH modifier,
-  background updater, or independent yt-dlp update channel.
+The installation, SQLite database, and media cache live in a user-owned local
+data directory. Network data directories are unsupported. Installed versions
+are kept separately so updates can be checked before activation and a retained
+previous version can be restored.
 
-Opt-in development diagnostics are available on stderr through `URMA_DEBUG`.
-They can also be appended to a caller-selected JSONL file with
-`URMA_DEBUG_FILE` when `URMA_DEBUG` is enabled.
+Urma is designed for a single local user and does not provide hosted multi-user
+isolation. MCP clients control how the returned text and images are processed,
+including whether they are sent to a model service.
