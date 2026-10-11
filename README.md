@@ -22,8 +22,6 @@
 
 <br />
 
-> **Release candidate:** Use the `rc` npm tag for RC testing.
-
 Urma retrieves captions and sampled frames from videos with a known end time.
 Each result identifies its source snapshot and requested timestamps or range.
 The host chooses what to retrieve, interprets the results, and decides how to
@@ -48,7 +46,7 @@ install or manage Node.js.
 
 ## Try Urma
 
-1. Install the current RC with `npx -y urma-mcp@rc setup`.
+1. Install Urma with `npx -y urma-mcp@latest setup`.
 2. [Register your MCP host](#register-a-generic-json-host), then restart it.
 3. Give the host a video URL or allowed local path and ask it to locate a moment
    using captions or an overview.
@@ -69,18 +67,14 @@ Example prompt (replace `<video URL>` with your source):
 Run the npm bootstrap with a supported Node.js version:
 
 ```sh
-npx -y urma-mcp@rc setup
+npx -y urma-mcp@latest setup
 ```
 
-The `rc` tag can move between candidates. To find its exact version without
-installing it:
+For a repeatable install, pin the package version:
 
 ```sh
-npm view urma-mcp dist-tags.rc
+npx -y urma-mcp@0.1.0 setup
 ```
-
-For a repeatable install, replace `rc` in the setup command with the exact
-version returned above.
 
 Setup downloads and verifies the pinned native tools, checks that the installed
 runtime can serve MCP requests, and selects the new installation for future
@@ -108,7 +102,7 @@ replaces `command`, `args`, and `env.URMA_DATA_DIR` while preserving other host
 options and environment values:
 
 ```sh
-npx -y urma-mcp@rc setup --client generic --config "/absolute/path/to/mcp.json"
+npx -y urma-mcp@latest setup --client generic --config "/absolute/path/to/mcp.json"
 ```
 
 The configuration file path must be absolute. The resulting entry has this
@@ -169,15 +163,17 @@ The [Evidence Model](docs/EVIDENCE_MODEL.md) covers caption-track selection,
 search, and pagination.
 
 Caption search and reads use one source-provided track; Urma does not
-transcribe speech. A caption match can locate a moment to verify with frames,
-but it does not establish that a visual event occurred.
+transcribe speech. For search, `partial: false` means all matches under that
+track's matching rules were returned. It says nothing about uncaptioned speech
+or visual events. A caption match can locate a moment to verify with frames.
 
 ### Visual inputs
 
 `get_overview` returns up to 12 sparse locator samples. `get_frames` supports
 explicit points, ordered bursts, and paged cadence schedules. The
 [Evidence Model](docs/EVIDENCE_MODEL.md) defines request bounds, panel output,
-pagination, and the limits of each result.
+pagination, and the limits of each result. Sampled frames describe only the
+returned points; they do not establish coverage between them.
 
 ### Example tool arguments
 
@@ -215,15 +211,6 @@ resource templates and authorization rules.
 Top-level MCP failures return `isError: true` with a JSON text object
 containing `code`, `retryable`, and `detail`. A cadence page can report a failed
 slot while continuing with other targets.
-
-### Evidence rules
-
-For caption search, `partial: false` means all matches under the selected
-track's matching rules were returned. It says nothing about uncaptioned
-speech or visual events. Sampled frames describe only the returned points; they
-do not establish coverage between them.
-
-See [Evidence Model](docs/EVIDENCE_MODEL.md) for the full contract.
 
 ## Configuration and troubleshooting
 
@@ -267,7 +254,7 @@ positive integer. `URMA_MAX_FRAME_SCHEDULE_PAGE_TARGETS` cannot exceed 12.
 | --- | --- |
 | `URMA_DATA_DIR` | Selects the persistent Urma data root. |
 | `URMA_LOCAL_ROOTS` | Platform-delimited list of roots allowed for local videos and sidecars. |
-| `URMA_ALLOW_UNC` | Allows UNC paths when set to `1` or `true`; the path must still be under an allowed root. |
+| `URMA_ALLOW_UNC` | Allows UNC video and sidecar inputs when set to `1` or `true`; allowed-root checks still apply. |
 | `URMA_DEBUG` | Writes opt-in acquisition and subprocess diagnostics to stderr when set to `1` or `true`. |
 | `URMA_DEBUG_FILE` | Appends diagnostics to a JSONL file when `URMA_DEBUG` is enabled. |
 
@@ -283,11 +270,11 @@ paths. It does not look up FFmpeg, ffprobe, or yt-dlp through `PATH`.
 The npm entry point exposes setup and version checks:
 
 ```sh
-npx -y urma-mcp@rc --version
-npx -y urma-mcp@rc setup
+npx -y urma-mcp@latest --version
+npx -y urma-mcp@latest setup
 ```
 
-The `npx` version command reports the npm candidate's version, not the installed
+The `npx` version command reports the npm package's version, not the installed
 generation. To check the installed generation, use the Node and launcher paths
 printed by setup.
 
@@ -341,46 +328,28 @@ model. It supports finite videos without authentication or DRM. See
 
 ## Security
 
-Local paths require explicit allowed roots. Remote HTTP(S) work uses a
-process-local Safe Proxy that validates destinations and DNS results before
-connecting. Filesystem-backed probe and extraction inputs are passed to FFmpeg
-and ffprobe through a file descriptor with an `fd`-only protocol allowlist.
-Installed native tools are receipt-bound and hash-checked before first use.
-Subprocesses use argument arrays, `shell: false`, an allowlisted environment,
-bounded output, deadlines, cancellation, and process-tree cleanup.
+Local paths require explicit allowed roots. Remote HTTP(S) requests validate
+destinations and DNS results before connecting. Installed native tools are
+hash-checked before first use.
 
-These controls protect the local application boundary under the trusted
-Node/FFmpeg/ffprobe/yt-dlp runtime model. They are not an operating-system
-sandbox against a compromised trusted executable.
+Urma relies on trusted Node.js, FFmpeg, ffprobe, and yt-dlp binaries. Its
+controls do not provide an operating-system sandbox against a compromised
+executable.
 
 See [Security](docs/SECURITY.md) for the full boundary and failure behavior.
 
 ## Development
 
-Use the Node.js 24.21.0 version pinned in `.node-version` and the pnpm version
-declared in `package.json` for development and publishing. The supported runtime
-versions are listed under [Requirements](#requirements). See the
-[development prerequisites](docs/CONTRIBUTING.md#development-setup) for native
-tools used by the tests. From the repository root:
+See the [contribution guide](docs/CONTRIBUTING.md) for development setup,
+test commands, and pull request expectations.
 
-```sh
-pnpm install --frozen-lockfile
-pnpm check
-```
+## Reporting problems
 
-Contributions are welcome. Follow the [contribution guide](docs/CONTRIBUTING.md)
-for code structure, documentation standards, and pull request expectations.
-
-## RC testing
-
-External testers can report installation, MCP-host, or source/provider problems
-through the [RC bug-report template](https://github.com/sajidurdev/urma/issues/new?template=bug-report.md).
-Include reproduction steps, your OS/architecture, Node.js and host versions,
-the installed Urma version, and expected versus actual behavior. For a
-source-specific issue, include a public URL or a description of a reproducible
-local video. Add relevant [doctor output](#cli-and-maintenance) if setup
-completed; otherwise include the setup error. Remove credentials, private
-URLs, and personal paths before posting logs.
+Report installation, MCP host, or source/provider problems using the
+[bug report template](https://github.com/sajidurdev/urma/issues/new?template=bug-report.md).
+Include reproduction steps and relevant [doctor output](#cli-and-maintenance)
+if setup completed; otherwise include the setup error. Remove credentials,
+private URLs, and personal paths before posting logs.
 
 ## License
 

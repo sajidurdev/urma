@@ -44,15 +44,21 @@ For a frame point, Urma validates video timing and asks for the first decodable
 presentation frame at or after the requested timestamp. The decoder's physical
 seek position is an acquisition detail. It is not the requested timestamp and
 does not replace it in evidence provenance.
+A complete source copy can supply its first video frame when the requested
+timestamp precedes that frame.
 
 Downloaded media sections are transport artifacts. Their requested bounds and
 their validated video-stream PTS coverage are recorded separately. A transport
-section covers an evidence point only after the timing check and frame
-validation succeed. For a zero-time request whose first section frame has a
-later PTS, Urma also compares that frame with the first decoded frame from the
-selected rendition's initial HLS segment and checks their relative video delay.
-It also requires matching display geometry. Unsupported or mismatched
+section covers an evidence point only after timing and frame validation
+succeed. For a zero-time request whose first section frame has a later PTS,
+Urma compares the first decoded RGB frames from that section and the selected
+rendition's initial HLS segment. The decoded frames must be identical, and the
+display geometry must match. Both video delays relative to their container
+starts must be positive and agree within 1 ms. The playlist must be finite,
+start at sequence zero, and contain an end marker. Unsupported or mismatched
 source-start evidence leaves the section subject to ordinary PTS coverage.
+Bounded sections at nonzero times still require validated video coverage of
+the requested timestamp.
 
 Batching can share remote setup and transport work. It does not combine the
 requested intervals or make one target's success validate another target.
@@ -82,10 +88,8 @@ The response distinguishes the requested interval from the observed samples:
 
 The example is schematic. A real response can contain up to 12 returned cells,
 and a short interval can produce fewer than 12 distinct points. The timestamps
-in `sampleTimestampsMs` are the cells returned by that call. Urma does not
-claim observation between adjacent points. The public MCP response omits the
-internal `sampling.resolutionMs` field; sample spacing does not guarantee
-coverage between frames.
+in `sampleTimestampsMs` are the cells returned by that call. Their spacing
+does not imply observation between points.
 
 An overview uses a native storyboard when available and otherwise decodes
 navigation media. Its artifact role is `locator`. Current overview producers
@@ -159,16 +163,17 @@ Each page retains the zero-based schedule index and one of these statuses:
 | `error` | That target failed; the slot contains `code`, `retryable`, and `detail`. |
 | `unfinished` | Work for that target did not finish in the current page. |
 
-The public MCP response omits each slot's internal `timing` record, which
-currently contains `selectedPresentationTimeMs: null` and status `unavailable`.
 The requested timestamp remains the schedule target; it is not a measured
 presentation timestamp (PTS).
 
-Use the returned `nextCursor` to continue. The cursor is opaque and signed; it
-is bound to the investigation, source snapshot, duration, frame
-representation, timeline and selection contracts, schedule definition, total
-target count, and next index. A cursor from another investigation, snapshot,
-or schedule is rejected.
+Use the returned `nextCursor` as `cursor` to continue without a new `request`.
+Cadence cursors are valid only in the running server process that issued them;
+after a restart, begin the schedule again without a cursor.
+
+The cursor is opaque and signed; it is bound to the investigation, source
+snapshot, duration, frame representation, timeline and selection contracts,
+schedule definition, total target count, and next index. A cursor from another
+investigation, snapshot, or schedule is rejected.
 
 When `presentation: "panel"` is requested for a cadence page, Urma creates a
 derived panel only when every slot on that page is a terminal success. Error
@@ -276,9 +281,9 @@ urma://investigation/<investigationId>/state
 ```
 
 It is derived from persisted source, acquisition, cache, artifact, and
-presentation records. Tool responses provide its URI as `stateResource` and
-omit the internal `stateSummary`. A state resource larger than the configured
-byte ceiling fails to read rather than returning truncated JSON.
+presentation records. Tool responses provide its URI as `stateResource`.
+A state resource larger than the configured byte ceiling fails to read rather
+than returning truncated JSON.
 
 ## What these results do not prove
 

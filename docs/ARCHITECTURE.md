@@ -44,17 +44,11 @@ and, when configured, a JSONL file.
 
 ## Distribution and startup
 
-The npm package provides the setup command and distributes Urma releases. With
-a supported native Node.js version installed, `urma setup`:
-
-1. Detects the supported platform target and validates the user-owned local
-   data root.
-2. Copies the packaged Urma runtime and installs the exact native artifacts
-   named by the release manifest.
-3. Verifies archive contents, executable identities, and hashes.
-4. Runs native qualification and a persisted-runtime MCP smoke test.
-5. Writes the receipt and publishes a complete immutable generation.
-6. Atomically selects that generation for new launcher processes.
+Setup validates the platform and local data root, copies the packaged runtime,
+and installs the native artifacts named by the manifest. Before activation,
+it verifies archive contents, executable identities, and hashes, then runs
+native qualification and a persisted-runtime MCP smoke test. It writes the
+receipt and atomically selects the complete immutable generation.
 
 The generation contains the runtime, `ffmpeg`, `ffprobe`, `yt-dlp`, assets,
 licensing notices, and `receipt.json`. The persistent root contains the
@@ -68,29 +62,17 @@ overwrite an existing generation in place. Staging and the final generation
 share the installation filesystem, and setup operations use one installation
 lock.
 
-The launcher reads the selected generation, validates its receipt and contained
-paths, and starts the recorded runtime with absolute paths. It also accepts
-the local `doctor`, `rollback`, and `recover` commands. `setup` must run from
-the npm entry point. `rollback` verifies the retained generation and persistent
-state before selecting it. `recover` restores the selector recorded in
-`ACTIVE.backup.json`.
+The launcher validates the selected generation's receipt and contained paths,
+then starts the recorded runtime with absolute paths. Rollback verifies the
+retained generation and persistent state before selecting it. Recovery restores
+the selector recorded in `ACTIVE.backup.json`.
 
 Normal MCP startup does not invoke npm, inspect `PATH`, download dependencies,
 or check provider freshness. A process keeps the generation selected when it
 starts; a later setup affects later processes.
 
-The supported targets are:
-
-```text
-windows-x64
-windows-arm64
-macos-x64
-macos-arm64
-linux-x64-glibc
-linux-arm64-glibc
-```
-
-Linux requires glibc. The data root must be a user-owned local filesystem path.
+See [Product scope](PRODUCT_SCOPE.md#distribution-and-persistence) for supported
+platforms and the [README](../README.md#cli-and-maintenance) for launcher commands.
 
 ## Source identity and snapshots
 
@@ -99,8 +81,8 @@ The resolver admits `local` and `remote` sources.
 Remote URLs use yt-dlp. YouTube single-video URLs enter a dedicated resolver
 branch that checks the requested video ID. Other HTTP(S) URLs use the generic
 remote branch. Both apply the remote source policy and finite timeline checks.
-See [Product scope](PRODUCT_SCOPE.md#source-admission) for the release gate and
-other source limits.
+See [Product scope](PRODUCT_SCOPE.md#source-admission) for supported sources and
+access limits.
 
 A logical source reference identifies the source identity rather than a
 particular delivery URL:
@@ -146,9 +128,7 @@ absence. File statistics alone do not define the revision.
 ```
 
 Source-level cache and in-flight work for equivalent requests can be reused.
-Presentations are recorded separately for each investigation. A new
-investigation starts with zero presented evidence even when the required bytes
-already exist in the cache.
+Presentations are recorded separately for each investigation.
 
 After inspection, each tool independently acquires the requested caption track,
 overview, or frames and records the evidence presented to the investigation.
@@ -158,33 +138,18 @@ frame request.
 ### Captions
 
 Caption acquisition parses JSON3, WebVTT, and SRT data into timestamped
-segments. A selected track remains identified by its track reference, language,
-kind, display name, and provider identifier when available. Urma does not merge
-tracks, translate text, repair automatic captions, or run speech-to-text.
-
-Search uses normalized literal matching over one selected track. Read requests
-use a source-global half-open interval. Search and read presentations retain
-the track identity and requested scope.
+segments. Search and read operations use one selected track and retain its
+identity and requested scope. Matching, pagination, and completeness rules are
+defined in [Caption evidence](EVIDENCE_MODEL.md#caption-evidence).
 
 ### Overviews
 
-An overview has a fixed request count of 12. The acquisition prefers a native
-storyboard and otherwise decodes navigation media. The returned cells are
-locator samples. Their observed coverage is `sample-points-only` with
-`continuous: false`; the implementation does not infer a sampling resolution
-from cell spacing.
-
-The overview panel is a locator artifact. Its cells carry sample provenance and
-map to the panel's investigation-scoped resource. The overview path does not
-turn those samples into exact-frame evidence.
+Overview acquisition prefers a native storyboard and otherwise decodes
+navigation media. The resulting locator panel retains cell provenance and
+resource mappings separately from canonical exact-frame artifacts. See
+[Overview semantics](EVIDENCE_MODEL.md#overview-semantics) for the public contract.
 
 ### Exact frames
-
-An exact-frame request is evaluated against validated video timing. Urma asks
-for the first decodable presentation frame at or after the requested source
-timestamp. A physical decoder seek position is an implementation detail and is
-not reported as the selected presentation time in the current MCP schedule
-schema.
 
 Explicit point requests and ordered bursts use the same canonical frame
 acquirer and content-addressed artifact identity. Remote HLS acquisition uses
@@ -192,40 +157,22 @@ bounded sections around the requested target and validates the resulting video
 stream timing before committing the section.
 
 Decoder seeks use the container's start time, recorded separately from the
-video stream's PTS coverage. A complete source copy can return its first video
-frame when the requested timestamp precedes that frame. A bounded section may
-use its delayed first video frame for source time zero only after Urma verifies
-that its first decoded image and display geometry match those of the selected
-rendition's first HLS media segment, and that both have the same video delay
-relative to their container start. This check accepts only a finite sequence-zero media playlist
-with an end marker; unsupported playlist forms retain strict PTS coverage.
-Bounded sections at nonzero times still require validated video coverage of
-the requested timestamp.
+video stream's PTS coverage. The timing and source-start validation rules are
+defined in [Evidence kinds](EVIDENCE_MODEL.md#evidence-kinds).
 
-An exact-frame panel is produced after the canonical frames exist. It uses up
-to 12 request-ordered frames in a deterministic row-major layout. The panel is
-a non-canonical locator artifact; each cell maps to its canonical frame by
-timestamp and investigation-scoped resource.
+Panels are derived from acquired canonical frames. Each cell maps back to its
+frame's timestamp and investigation-scoped resource; deriving a panel does not
+change the canonical frame identities.
 
 ### Fixed cadence
 
-A cadence request defines a half-open interval and a positive integer cadence.
-For index `i`, the target is:
-
-```text
-startMs + i * cadenceMs, while target < endMs
-```
-
-The server computes the complete target count before acquisition. Pages contain
-at most the configured page limit, defaulting to 12, and a schedule contains at
-most the configured total limit, defaulting to 120. Each slot retains its
-schedule index and is `success`, `error`, or `unfinished`.
-
-The continuation cursor is opaque and signed. It binds the investigation,
-source snapshot, duration, representation, timeline and selection contracts,
-schedule definition, total target count, and next index. A later call must use
-the returned cursor without a new request. There is no future-page media cache;
-successful slots use the ordinary exact-frame artifacts.
+The server validates the complete target count before acquisition, then
+processes one page at a time through the exact-frame acquirer. Signed cursors
+bind continuation to the investigation, source snapshot, schedule, and selection
+contracts. There is no future-page media cache; successful slots use the
+ordinary exact-frame artifacts. See
+[Fixed-cadence schedules](EVIDENCE_MODEL.md#fixed-cadence-schedules) for target
+calculation, page limits, statuses, and cursor use.
 
 ## Cache, artifacts, and storage
 
@@ -256,45 +203,18 @@ verify the expected path, size, and SHA-256 digest.
 SQLite is authoritative for source records, snapshots, locators,
 investigations, transcript tracks and segments, artifacts, acquisitions,
 derivations, presentations, and presentation authorization. The current schema
-version is 5. Incompatible pre-launch state is rejected; Urma does not migrate
-it silently.
+version is 5. Incompatible database schemas are rejected; Urma does not migrate
+them silently.
 
-An artifact resource is readable only when its artifact content has been
-presented to the requesting investigation. The resource namespace is:
-
-```text
-urma://investigation/<investigationId>/artifact/<artifactHash>
-```
-
-Reading an authorized resource reopens existing content. It does not create a
-presentation or add temporal coverage. The investigation state resource is
-derived from the persisted records and is bounded by the resource limit.
+Resource authorization and state projection are described in
+[Resources and state](EVIDENCE_MODEL.md#resources-and-state).
 
 ## Remote acquisition and subprocesses
 
-The process-local Safe Proxy listens on loopback and supports HTTP forwarding
-and TLS-preserving HTTPS `CONNECT`. It resolves DNS, validates every returned
-address, and dials the validated address directly. Each redirect, manifest,
-fragment, caption, storyboard, and delivery destination enters the same checks.
-
-Remote yt-dlp calls use fixed arguments that disable ambient configuration,
-plugins, and cookies, and route requests through the Safe Proxy. Direct FFmpeg
-and ffprobe HTTP(S) inputs receive an explicit proxy and a
-restricted protocol allowlist. Child environments are allowlisted, and proxy
-configuration is rejected from those environments. Native executables are
-generation-local and receipt-bound.
-
-Filesystem-backed media sent to FFmpeg or ffprobe for inspection or frame
-extraction uses a seekable file descriptor and an `fd`-only protocol allowlist.
-
-Subprocess output, media, manifests, and caption data have independent byte
-limits. Timeouts and cancellation terminate the process tree. A failed or
-cancelled acquisition does not create a successful cache record.
+Remote acquisition routes through the process-local Safe Proxy and
+generation-local, receipt-bound executables. Destination validation, filesystem
+input restrictions, and subprocess limits are described in [Security](SECURITY.md).
 
 Equivalent acquisitions share one in-flight operation (singleflight). Each
 observer can cancel independently. Shared work stops when no observer remains.
-
-The public evidence contract, including coverage and completeness semantics,
-is defined in [Evidence Model](EVIDENCE_MODEL.md). The current release boundary
-is defined in [Product scope](PRODUCT_SCOPE.md), and the threat model and
-security controls are in [Security](SECURITY.md).
+A failed or cancelled acquisition does not create a successful cache record.

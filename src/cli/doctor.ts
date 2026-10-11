@@ -349,9 +349,9 @@ async function databaseCheck(config: UrmaConfig): Promise<DoctorCheck> {
     if (schema.version !== SCHEMA_VERSION) {
       return failure(
         "Database",
-        `unsupported pre-launch schema v${
+        `unsupported database schema v${
           String(schema.version)
-        }; remove ${databasePath} and reacquire evidence`,
+        } at ${databasePath}; use a fresh data directory and reacquire evidence`,
         "unsupported",
       );
     }

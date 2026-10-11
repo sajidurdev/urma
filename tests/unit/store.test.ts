@@ -276,7 +276,7 @@ test("existing full-text tables are left untouched when writing transcripts", as
   legacy.close();
 });
 
-test("store rejects obsolete pre-launch schemas instead of migrating them", async (t) => {
+test("store rejects obsolete database schemas instead of migrating them", async (t) => {
   const directory = await fixture(t);
   const database = new DatabaseSync(path.join(directory, "urma.db"));
   database.exec(
@@ -289,7 +289,7 @@ test("store rejects obsolete pre-launch schemas instead of migrating them", asyn
   );
 });
 
-test("store rejects the previous development schema after the RC provenance break", async (t) => {
+test("store rejects the previous development schema", async (t) => {
   const directory = await fixture(t);
   const database = new DatabaseSync(path.join(directory, "urma.db"));
   database.exec(
