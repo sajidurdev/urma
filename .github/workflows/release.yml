@@ -380,7 +380,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node:
+        node: &qualification_nodes
           - version: "22.16.0"
             id: node-22.16.0
             label: Node.js 22.16.0 minimum
@@ -400,9 +400,6 @@ jobs:
           - name: Windows ARM64
             id: windows-arm64
             runner: windows-11-vs2026-arm
-          - name: macOS Intel
-            id: macos-x64
-            runner: macos-15-intel
           - name: macOS ARM64
             id: macos-arm64
             runner: macos-15
@@ -415,7 +412,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    steps:
+    steps: &qualification_steps
       - name: Check out the native qualification harness
         uses: actions/checkout@v6
         with:
@@ -492,6 +489,26 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  qualify_macos_intel:
+    name: ${{ matrix.target.name }} / ${{ matrix.node.label }}
+    needs: checks_and_pack
+    if: ${{ needs.checks_and_pack.result == 'success' }}
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        node: *qualification_nodes
+        target:
+          - name: macOS Intel
+            id: macos-x64
+            runner: macos-15-intel
+    permissions:
+      contents: read
+      actions: read
+    steps: *qualification_steps
+
   publish:
     name: Publish and tag release
     needs:
@@ -499,7 +516,8 @@ jobs:
       - checks_and_pack
       - compatibility_gate
       - qualify
-    if: ${{ needs.validate.outputs.release_type != 'test' && needs.compatibility_gate.result == 'success' && needs.qualify.result == 'success' }}
+      - qualify_macos_intel
+    if: ${{ needs.validate.outputs.release_type != 'test' && needs.compatibility_gate.result == 'success' && needs.qualify.result == 'success' && needs.qualify_macos_intel.result == 'success' }}
     runs-on: ubuntu-24.04
     environment: npm-release
     permissions:

@@ -18,6 +18,7 @@ import { parseInvestigationRef, parseSourceRef } from "../src/core/ids.js";
 import { inspectMcpOutput, overviewMcpOutput } from "../src/mcp/schemas.js";
 import { SqliteStore } from "../src/store/sqlite-store.js";
 import { cadenceAssertionFailures } from "./cadence.js";
+import { classifyFailure, isFixtureFailure, responsibility, type ErrorInfo, type FailureClass } from "./failures.js";
 
 /** Run compatibility checks through the MCP client interface */
 
@@ -35,34 +36,6 @@ type FixtureOutcome =
   | "PROVIDER_UNAVAILABLE_OR_BLOCKED"
   | "UNSUPPORTED_OR_REGRESSION"
   | "UNTESTED";
-type FailureClass =
-  | "PASS"
-  | "FIXTURE_GONE"
-  | "FIXTURE_NOT_SINGLE_VIDEO"
-  | "FIXTURE_LOGIN_REQUIRED"
-  | "FIXTURE_GEO_BLOCKED"
-  | "FIXTURE_PROCESSING"
-  | "PROVIDER_403_OR_RATE_LIMIT"
-  | "PROVIDER_EXTRACTION_FAILED"
-  | "RESOLVER_FAILED"
-  | "POLICY_REJECTED"
-  | "COLLECTION_REJECTED"
-  | "LIVE_REJECTED"
-  | "DRM_REJECTED"
-  | "NO_VIDEO_STREAM"
-  | "FINITE_TIMELINE_FAILED"
-  | "TRANSPORT_UNSUPPORTED"
-  | "ACQUISITION_FAILED"
-  | "SAFE_PROXY_INCOMPATIBLE"
-  | "FRAME_FAILED"
-  | "OVERVIEW_FAILED"
-  | "CAPTION_UNAVAILABLE"
-  | "CAPTION_ACQUISITION_FAILED"
-  | "TRANSCRIPT_FAILED"
-  | "CACHE_FAILED"
-  | "PROVENANCE_FAILED"
-  | "INTERNAL_BUG"
-  | "UNTESTED";
 
 type Fixture = Readonly<{
   provider: string;
@@ -76,12 +49,6 @@ type Fixture = Readonly<{
   refresh: boolean;
   notes?: string;
   untestedReason?: string;
-}>;
-
-type ErrorInfo = Readonly<{
-  code: string;
-  retryable: boolean;
-  detail: string;
 }>;
 
 type CallOutcome = Readonly<{
@@ -301,90 +268,6 @@ function statusForBlockingFailure(failure: FailureClass): Status {
     : "BLOCKED";
 }
 
-function isFixtureFailure(failure: FailureClass): boolean {
-  return [
-    "FIXTURE_GONE",
-    "FIXTURE_NOT_SINGLE_VIDEO",
-    "FIXTURE_LOGIN_REQUIRED",
-    "FIXTURE_GEO_BLOCKED",
-    "FIXTURE_PROCESSING",
-    "UNTESTED",
-  ].includes(failure)
-}
-
-function classifyFailure(stage: string, error: ErrorInfo): FailureClass {
-  const text = `${error.code} ${error.detail}`.toLowerCase();
-  if (/fixture|video.*not found|not found|removed|deleted|gone|404/.test(text)) {
-    return "FIXTURE_GONE";
-  }
-  if (/login|logged.?in|sign in|authentication|requires? auth|requires? account|private|age.?restrict/.test(text)) {
-    return "FIXTURE_LOGIN_REQUIRED";
-  }
-  if (/geo|country|region|location|not available in your/.test(text)) {
-    return "FIXTURE_GEO_BLOCKED";
-  }
-  if (/403|forbidden|429|rate.?limit|too many requests|http error 4\d\d|status(?: code)? 4\d\d|ip address is blocked|blocked from accessing/.test(text)) {
-    return "PROVIDER_403_OR_RATE_LIMIT";
-  }
-  if (/video is processing|still processing|processing(?: the)? video/.test(text)) {
-    return "FIXTURE_PROCESSING";
-  }
-  if (/drm|encrypted|widevine|fairplay|playready/.test(text)) {
-    return "DRM_REJECTED";
-  }
-  if (/live|upcoming|post.?live/.test(text)) return "LIVE_REJECTED";
-  if (/playlist|collection|multi.?video|channel|profile|search|multiple entries|one finite video/.test(text)) {
-    return "FIXTURE_NOT_SINGLE_VIDEO";
-  }
-  if (/safe proxy|safe-proxy|proxy destination|proxy.*incompat|loopback/.test(text)) {
-    return "SAFE_PROXY_INCOMPATIBLE";
-  }
-  if (/policy|excluded/.test(text)) return "POLICY_REJECTED";
-  if (/does not expose a video|no video|video representation/.test(text)) {
-    return "NO_VIDEO_STREAM";
-  }
-  if (/timeline|duration|finite|manifest|ffprobe|pts|timestamp/.test(text)) {
-    return stage === "resolve" || stage === "inspect"
-      ? "FINITE_TIMELINE_FAILED"
-      : "TRANSPORT_UNSUPPORTED";
-  }
-  if (stage === "overview") return "OVERVIEW_FAILED";
-  if (stage === "caption-discovery") return "CAPTION_UNAVAILABLE";
-  if (stage === "caption-read") return "CAPTION_ACQUISITION_FAILED";
-  if (stage === "transcript") return "TRANSCRIPT_FAILED";
-  if (stage === "cache") return "CACHE_FAILED";
-  if (stage === "provenance") return "PROVENANCE_FAILED";
-  if (/acqui|download|media budget|media/.test(text)) return "ACQUISITION_FAILED";
-  if (stage === "cadence" || stage === "multiple-frames") return "FRAME_FAILED";
-  if (stage === "frame") return "FRAME_FAILED";
-  if (/extractor|no video formats|unable to extract|unsupported site|site is not supported/.test(text)) {
-    return "PROVIDER_EXTRACTION_FAILED";
-  }
-  if (stage === "resolve" || stage === "inspect") return "RESOLVER_FAILED";
-  return "INTERNAL_BUG";
-}
-
-type FailureResponsibility = "Urma" | "upstream" | "fixture";
-
-function responsibility(failure: FailureClass): FailureResponsibility {
-  if ([
-    "FIXTURE_GONE",
-    "FIXTURE_NOT_SINGLE_VIDEO",
-    "FIXTURE_LOGIN_REQUIRED",
-    "FIXTURE_GEO_BLOCKED",
-    "FIXTURE_PROCESSING",
-  ].includes(failure)) return "fixture";
-  if (
-    failure === "PROVIDER_403_OR_RATE_LIMIT" ||
-    failure === "PROVIDER_EXTRACTION_FAILED" ||
-    failure === "DRM_REJECTED" ||
-    failure === "LIVE_REJECTED" ||
-    failure === "NO_VIDEO_STREAM" ||
-    failure === "RESOLVER_FAILED"
-  ) return "upstream";
-  return "Urma";
-}
-
 function recordedFailureClass(value: unknown): FailureClass | null {
   if (!record(value) || typeof value.class !== "string") return null;
   return value.class as FailureClass;
@@ -410,6 +293,7 @@ function isProviderUnavailableFailure(failure: FailureClass | null): boolean {
     "FIXTURE_GEO_BLOCKED",
     "FIXTURE_PROCESSING",
     "PROVIDER_403_OR_RATE_LIMIT",
+    "PROVIDER_NETWORK_TIMEOUT",
   ].includes(failure);
 }
 
