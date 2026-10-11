@@ -100,7 +100,7 @@ test("doctor distinguishes a present but unusable executable", async (t) => {
   }
 });
 
-test("doctor rejects obsolete pre-launch database schemas instead of calling them usable", async (t) => {
+test("doctor rejects obsolete database schemas instead of calling them usable", async (t) => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "urma-doctor-schema-"),
   );
@@ -129,6 +129,6 @@ test("doctor rejects obsolete pre-launch database schemas instead of calling the
   assert.equal(check.status, "fail");
   assert.match(
     check.detail,
-    /unsupported pre-launch schema v2.*reacquire evidence/u,
+    /unsupported database schema v2.*fresh data directory.*reacquire evidence/u,
   );
 });

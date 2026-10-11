@@ -18,10 +18,13 @@ roots. For a local video or caption sidecar, Urma:
 3. checks that the canonical file remains inside a canonical allowed root; and
 4. requires a regular file.
 
-UNC and network paths are rejected for local input unless `URMA_ALLOW_UNC` is
-set to `1` or `true`. Allowing UNC input does not remove the configured-root
-check. The persistent Urma data root always has to be a user-owned local
-filesystem path.
+UNC paths are rejected for local input unless `URMA_ALLOW_UNC` is set to `1`
+or `true`. Allowing UNC input does not remove the configured-root check.
+
+The persistent Urma data root must be local and accessible to the current
+user; `URMA_ALLOW_UNC` does not apply to it. On macOS and Linux, setup also
+checks that the root, or its nearest existing parent, is owned by that user.
+Urma does not check whether mapped drives or mount points use network storage.
 
 A local caption sidecar is looked up beside the video as `<basename>.vtt`, then
 `<basename>.srt`. The selected sidecar passes through the same canonical-root

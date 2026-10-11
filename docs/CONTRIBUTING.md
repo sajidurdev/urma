@@ -7,14 +7,10 @@
 Contributions are welcome, including bug fixes, documentation corrections,
 tests, and improvements within the [product scope](PRODUCT_SCOPE.md).
 
-For behavior changes, run the commands below and update the relevant tests and
-documentation. Preserve the documented evidence, security, and distribution
-boundaries.
-
 ## Development setup
 
 Urma supports Node.js `>=22.16.0 <23`, `>=24.0.0 <25`, or `>=26.0.0 <27`.
-For development and publishing, use Node.js 24.21.0 from
+For development, use Node.js 24.21.0 from
 [`.node-version`](https://github.com/sajidurdev/urma/blob/main/.node-version)
 and the pnpm version declared in [`package.json`](https://github.com/sajidurdev/urma/blob/main/package.json).
 The test suites also use `ffmpeg`, `ffprobe`, and `yt-dlp` from `PATH`. Media
@@ -22,10 +18,7 @@ fixtures require an FFmpeg build with `libx264`. See
 [`ci.yml`](https://github.com/sajidurdev/urma/blob/main/.github/workflows/ci.yml)
 for the CI tool setup and
 [`manifest.ts`](https://github.com/sajidurdev/urma/blob/main/src/distribution/manifest.ts)
-for pinned native versions. BtbN retains its latest 14 daily builds and
-month-end builds for two years. Keep pins on a verified month-end build and
-refresh them before that retention window expires; see the
-[BtbN retention policy](https://github.com/BtbN/FFmpeg-Builds#release-retention-policy).
+for pinned native versions.
 Packaged installations use their own managed tools; setup does not add them
 to your development shell's `PATH`.
 
@@ -78,16 +71,15 @@ node --test scripts/tests/*.test.mjs
 - Use comments for non-obvious invariants or trade-offs. Keep local comments
   short and remove comments that only restate the next line.
 
-CI runs on every push and pull request against Node.js 22.16.0, the latest 22,
-the latest 24, and the latest Current 26. Release qualification runs the exact
-packed npm artifact on six supported platforms across those four runtimes (24
-platform/runtime combinations). Release packaging and npm publishing remain on
-the Node.js 24.21.0 toolchain pinned in `.node-version`. Changes to installation,
-launchers, managed binaries, or release metadata require the corresponding
-distribution checks to remain passing.
+CI runs on pull request updates and pushes to `main` against Node.js 22.16.0,
+the latest 22, the latest 24, and the latest Current 26. Changes to installation,
+launchers, managed binaries, or release metadata also need to pass the
+[distribution checks](https://github.com/sajidurdev/urma/blob/main/.github/workflows/release.yml).
 
-Test release runs enforce the same correctness gate as RC and stable releases,
-with publication disabled.
+## Releasing
+
+Releases are managed by the owner and designated core maintainers. Contributors
+should leave package versions unchanged unless requested.
 
 ## Documentation quality
 
@@ -102,9 +94,6 @@ Put prerequisites before commands, label placeholder values, and describe
 limits beside the behavior they constrain. Remove repeated summaries and
 claims that have no basis in the implementation.
 
-Review AI-assisted changes as carefully as any other submission. Verify the
-commands, links, examples, and claims, and report which checks you ran.
-
 ## Pull request structure
 
 Use a specific title and organize the description around:
@@ -115,8 +104,6 @@ Use a specific title and organize the description around:
 
 For documentation-only changes, check examples, links, and consistency with
 the implementation. Run the relevant build and test checks for code changes.
-For installation or release changes, also check the qualification workflow in
-[`release.yml`](https://github.com/sajidurdev/urma/blob/main/.github/workflows/release.yml).
 
 ## License
 

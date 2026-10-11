@@ -15,18 +15,11 @@ whether it supports a conclusion.
 
 ### Source admission
 
-Urma uses yt-dlp to resolve public, finite, non-DRM video URLs. Before an RC or
-stable release, the compatibility gate requires six provider fixtures to pass:
-X / Twitter, Facebook Reel, Instagram Reel, Loom, Streamable, and Mux-hosted
-public HLS. Other sources are best effort; yt-dlp support alone does not
-guarantee that Urma can inspect a video.
-Blocking Urma failures on best-effort providers also fail release correctness;
-provider access and fixture limitations are tracked separately as external
-coverage.
-
-YouTube single-video URLs use a dedicated yt-dlp resolver path. YouTube is
-outside the six-provider release gate, and availability depends on upstream
-access.
+Urma uses yt-dlp to resolve public, finite, non-DRM video URLs. Compatibility
+checks cover public fixtures from X / Twitter, Facebook Reel, Instagram Reel,
+Loom, Streamable, and Mux-hosted public HLS. Other providers, including YouTube,
+are best effort; yt-dlp support alone does not guarantee that Urma can inspect
+a video.
 
 Urma accepts:
 
@@ -73,33 +66,6 @@ speech from a video that has no supported caption track.
   local data root.
 - MCP stdio, read-only doctor checks, and local generation rollback/recovery.
 
-## Host and CLI surface
-
-The npm entry point accepts:
-
-```text
-urma setup [--data-dir PATH] [--client generic --config PATH]
-urma --version
-urma -v
-```
-
-The npm entry point starts MCP stdio only after the persistent runtime has been
-selected. The persistent `launcher-v1.mjs` starts that runtime and accepts
-`doctor`, `rollback`, and `recover`. Run those commands through the launcher
-with the Node executable and data root selected by setup. `setup` must run from
-the npm release; the launcher rejects it.
-
-Setup can register a generic JSON host entry. Registration uses the absolute
-Node executable recorded by setup, the absolute `launcher-v1.mjs` path, and
-the selected `URMA_DATA_DIR`. It preserves unrelated `mcpServers` entries.
-For an existing `urma` object, setup updates `command`, `args`, and
-`env.URMA_DATA_DIR` while preserving other host options and environment values.
-
-Normal MCP startup is local. It does not invoke npm, update the installation,
-look up native tools through `PATH`, or check provider freshness. A later setup
-selects a generation for later processes; an already running process retains
-the generation it loaded.
-
 ## Excluded from v0.1
 
 Urma v0.1 does not include:
@@ -124,8 +90,3 @@ Urma v0.1 does not include:
 Opt-in development diagnostics are available on stderr through `URMA_DEBUG`.
 They can also be appended to a caller-selected JSONL file with
 `URMA_DEBUG_FILE` when `URMA_DEBUG` is enabled.
-
-## Scope boundary
-
-For a proposed MCP operation, specify its inputs, returned evidence, limits,
-errors, and what the result cannot establish.

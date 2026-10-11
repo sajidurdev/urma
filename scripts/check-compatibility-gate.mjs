@@ -225,7 +225,7 @@ export function gateText(summary) {
 export async function runGate(options = {}) {
   const reportPath = path.resolve(options.reportPath ?? "compat/results/latest.json");
   const manifestPath = path.resolve(options.manifestPath ?? "compat/fixtures/providers.json");
-  const releaseType = options.releaseType ?? process.env.RELEASE_TYPE ?? "rc";
+  const releaseType = options.releaseType ?? process.env.RELEASE_TYPE ?? "stable";
   if (!["test", "rc", "stable"].includes(releaseType)) {
     throw new Error(`compatibility gate received unsupported release type ${JSON.stringify(releaseType)}`);
   }
@@ -251,7 +251,7 @@ async function main() {
   });
   process.stdout.write(result.output);
   if (result.shouldFail) {
-    throw new Error(`Release correctness compatibility gate failed for release_type=${process.env.RELEASE_TYPE ?? "rc"}; inspect ${result.reportPath}.`);
+    throw new Error(`Release correctness compatibility gate failed for release_type=${process.env.RELEASE_TYPE ?? "stable"}; inspect ${result.reportPath}.`);
   }
 }
 

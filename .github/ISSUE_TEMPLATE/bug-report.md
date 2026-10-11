@@ -1,7 +1,7 @@
 ---
-name: RC bug report
-about: Report an installation, MCP-host, or source/provider problem during RC testing
-title: "[RC] "
+name: Bug report
+about: Report an installation, MCP host, or source/provider problem
+title: "[Bug] "
 labels: ""
 assignees: ""
 ---
@@ -27,23 +27,17 @@ video that reproduces it.
 2. <!-- Next step -->
 3. <!-- Step that triggers the problem -->
 
+## Behavior
+
+- Expected:
+- Actual:
+
 ## Diagnostics
 
 If installation completed, run `doctor` through the installed launcher as
 shown in the [README](https://github.com/sajidurdev/urma#cli-and-maintenance).
 Use the same data root and local-root settings as the MCP host. If setup or
 the launcher fails, include that error below instead.
-
-```text
-
-```
-
-## Behavior
-
-- Expected:
-- Actual:
-
-## Error or log
 
 Include the error code and relevant output as text. Note whether the failure
 happens every time or intermittently.

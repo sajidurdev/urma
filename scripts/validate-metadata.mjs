@@ -59,7 +59,7 @@ export function validateReleaseRequest(pkg, { releaseType, defaultBranch, refTyp
   assert(["test", "rc", "stable"].includes(releaseType), "Unknown release type");
   assert(typeof defaultBranch === "string" && defaultBranch.trim().length > 0, "GitHub repository default_branch metadata is missing");
   if (releaseType !== "test") {
-    assert(refType === "branch" && refName === defaultBranch, `RC/stable releases require the default branch ${defaultBranch}; received ${refType}:${refName}`);
+    assert(refType === "branch" && refName === defaultBranch, `Publishing requires the default branch ${defaultBranch}; received ${refType}:${refName}`);
   }
   const versionPattern = releaseType === "rc" ? /^\d+\.\d+\.\d+-rc\.(0|[1-9]\d*)$/u : /^\d+\.\d+\.\d+$/u;
   assert(semver.test(pkg.version) && (releaseType === "test" || versionPattern.test(pkg.version)), `Version ${pkg.version} is not valid for ${releaseType}`);

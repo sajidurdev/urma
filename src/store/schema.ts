@@ -1,4 +1,4 @@
-/** Current pre-launch storage contract; older local data is invalidated */
+/** Incompatible database schemas are rejected; no migrations are applied */
 export const SCHEMA_VERSION = 5;
 
 export const CURRENT_SCHEMA = `
