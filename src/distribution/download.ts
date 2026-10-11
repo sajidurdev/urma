@@ -18,13 +18,30 @@ function artifactError(message: string, cause?: unknown): UrmaError {
 }
 
 function retryDelayMs(response: Response, attempt: number): number {
-  const backoffMs = 1_000 * 2 ** (attempt - 1);
   const value = response.headers.get("retry-after")?.trim() ?? "";
   const requestedMs = /^\d+$/u.test(value)
     ? Number(value) * 1_000
     : /^[A-Za-z]/u.test(value) ? Date.parse(value) - Date.now() : NaN;
+  const baseMs = response.status === 429 && !(requestedMs > 0) ? 30_000 : 1_000;
+  const backoffMs = baseMs * 2 ** (attempt - 1);
   const minimumMs = Number.isNaN(requestedMs) ? 0 : Math.max(0, requestedMs);
   return Math.max(backoffMs, minimumMs) + Math.floor(Math.random() * backoffMs / 4);
+}
+
+function responseDiagnostics(response: Response, requestedUrl: string): string {
+  let origin = "unknown";
+  try {
+    origin = new URL(response.url || requestedUrl).origin;
+  } catch {
+    // An invalid response URL must not replace the HTTP failure.
+  }
+  const headers = ["retry-after", "ratelimit-reset", "x-ratelimit-reset"]
+    .flatMap((name) => {
+      const value = response.headers.get(name);
+      if (value !== null) return [`${name}=${JSON.stringify(value.slice(0, 128))}`];
+      return name === "retry-after" ? [`${name}=missing`] : [];
+    });
+  return `response origin=${origin}; ${headers.join("; ")}`;
 }
 
 async function fetchArtifact(
@@ -49,7 +66,7 @@ async function fetchArtifact(
     }
     if (response.ok) return response;
     await response.body?.cancel().catch(() => undefined);
-    const message = `Pinned artifact request failed with HTTP ${String(response.status)} for ${artifact.url} after ${String(attempt)} attempt(s)`;
+    const message = `Pinned artifact request failed with HTTP ${String(response.status)} for ${artifact.url} after ${String(attempt)} attempt(s); ${responseDiagnostics(response, artifact.url)}`;
     if (![429, 502, 503, 504].includes(response.status) || attempt === maxAttempts) {
       throw artifactError(message);
     }

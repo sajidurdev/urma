@@ -109,7 +109,7 @@ test("artifact download backs off exponentially for temporary gateway failures",
   assert.deepEqual(await readFile(destination), payload);
 });
 
-test("artifact download uses backoff for missing, invalid, zero, or past Retry-After values", async (t) => {
+test("rate-limited artifact downloads wait thirty seconds when Retry-After is unusable", async (t) => {
   for (const value of [undefined, "invalid", "-1", "1.5", "0", "Wed, 01 Jan 2020 00:00:00 GMT"]) {
     await t.test(String(value), async (t) => {
       const destination = await prepareDownload(t);
@@ -121,7 +121,7 @@ test("artifact download uses backoff for missing, invalid, zero, or past Retry-A
           : new Response(payload);
       });
       await download.started;
-      await advanceTime(t, 999);
+      await advanceTime(t, 29_999);
       assert.equal(requests, 1);
       await advanceTime(t, 1);
       await download.result;
@@ -139,7 +139,7 @@ test("artifact download stops after four rate-limited attempts and removes the p
     return new Response(new ReadableStream({ cancel() { cancelled += 1; } }), { status: 429 });
   });
   await download.started;
-  for (const delayMs of [1_000, 2_000, 4_000]) await advanceTime(t, delayMs);
+  for (const delayMs of [30_000, 60_000, 120_000]) await advanceTime(t, delayMs);
   await assert.rejects(download.result, (error: unknown) => {
     assert(error instanceof UrmaError);
     assert.equal(error.code, "ARTIFACT_DOWNLOAD_FAILED");
@@ -151,6 +151,48 @@ test("artifact download stops after four rate-limited attempts and removes the p
   await assert.rejects(access(destination), { code: "ENOENT" });
   await advanceTime(t, 10 * 60_000);
   assert.equal(requests, 4);
+});
+
+test("rate-limited artifact downloads recover after a longer cooldown with jitter", async (t) => {
+  const destination = await prepareDownload(t);
+  t.mock.method(Math, "random", () => 0.5);
+  const startedAt = Date.now();
+  const requestedAt: number[] = [];
+  const download = startDownload(destination, async () => {
+    requestedAt.push(Date.now());
+    return Date.now() - startedAt < 60_000
+      ? new Response("rate limited", { status: 429 })
+      : new Response(payload);
+  });
+  await download.started;
+  for (const [index, delayMs] of [33_750, 67_500].entries()) {
+    await advanceTime(t, delayMs - 1);
+    assert.equal(requestedAt.length, index + 1);
+    await advanceTime(t, 1);
+    assert.equal(requestedAt.length, index + 2);
+  }
+  await download.result;
+  assert.deepEqual(await readFile(destination), payload);
+});
+
+test("artifact failure diagnostics identify the mirror and rate-limit headers without URL credentials", async (t) => {
+  const destination = await prepareDownload(t);
+  const response = new Response("busy", { status: 429, headers: {
+    "retry-after": "3600", "ratelimit-reset": "3600", "x-ratelimit-reset": "1800003600",
+  } });
+  Object.defineProperty(response, "url", {
+    value: "https://name:password@mirror.invalid:4242/pub/ffprobe.zip?token=secret#private",
+  });
+  await assert.rejects(startDownload(destination, async () => response).result, (error: unknown) => {
+    assert(error instanceof UrmaError);
+    assert.match(error.message, /response origin=https:\/\/mirror\.invalid:4242/u);
+    assert.match(error.message, /retry-after="3600"/u);
+    assert.match(error.message, /ratelimit-reset="3600"/u);
+    assert.match(error.message, /x-ratelimit-reset="1800003600"/u);
+    assert.doesNotMatch(error.message, /name:password|token=secret|#private/u);
+    return true;
+  });
+  await assert.rejects(access(destination), { code: "ENOENT" });
 });
 
 test("artifact download cancels backoff when the overall download deadline expires", async (t) => {
