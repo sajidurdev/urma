@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, open, rm } from "node:fs/promises";
 import path from "node:path";
+import timers from "node:timers/promises";
 import { UrmaError } from "../core/errors.js";
 import type { ArtifactSpec } from "./manifest.js";
 
@@ -16,6 +17,50 @@ function artifactError(message: string, cause?: unknown): UrmaError {
   return new UrmaError("ARTIFACT_DOWNLOAD_FAILED", message, { cause });
 }
 
+function retryDelayMs(response: Response, attempt: number): number {
+  const backoffMs = 1_000 * 2 ** (attempt - 1);
+  const value = response.headers.get("retry-after")?.trim() ?? "";
+  const requestedMs = /^\d+$/u.test(value)
+    ? Number(value) * 1_000
+    : /^[A-Za-z]/u.test(value) ? Date.parse(value) - Date.now() : NaN;
+  const minimumMs = Number.isNaN(requestedMs) ? 0 : Math.max(0, requestedMs);
+  return Math.max(backoffMs, minimumMs) + Math.floor(Math.random() * backoffMs / 4);
+}
+
+async function fetchArtifact(
+  artifact: ArtifactSpec,
+  fetchImpl: ArtifactFetch,
+  signal: AbortSignal,
+  deadlineMs: number,
+): Promise<Response> {
+  const maxAttempts = 4;
+  for (let attempt = 1; ; attempt += 1) {
+    signal.throwIfAborted();
+    let response: Response;
+    try {
+      response = await fetchImpl(artifact.url, {
+        redirect: "follow",
+        cache: "no-store",
+        signal,
+        headers: { "user-agent": "Urma-v1-installer" },
+      });
+    } catch (error) {
+      throw artifactError(`Could not download pinned ${artifact.provider} ${artifact.kind} artifact`, error);
+    }
+    if (response.ok) return response;
+    await response.body?.cancel().catch(() => undefined);
+    const message = `Pinned artifact request failed with HTTP ${String(response.status)} for ${artifact.url} after ${String(attempt)} attempt(s)`;
+    if (![429, 502, 503, 504].includes(response.status) || attempt === maxAttempts) {
+      throw artifactError(message);
+    }
+    const delayMs = retryDelayMs(response, attempt);
+    if (delayMs >= deadlineMs - performance.now()) {
+      throw artifactError(`${message}; retry delay exceeds the remaining download timeout; retry setup later`);
+    }
+    await timers.setTimeout(delayMs, undefined, { signal });
+  }
+}
+
 export async function downloadAndVerifyArtifact(
   artifact: ArtifactSpec,
   destination: string,
@@ -28,26 +73,17 @@ export async function downloadAndVerifyArtifact(
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw artifactError("Artifact download byte limit is invalid");
   const contentLengthLimit = artifact.archiveBytes > 0 ? artifact.archiveBytes : undefined;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 10 * 60_000);
+  const timeoutMs = options.timeoutMs ?? 10 * 60_000;
+  const deadlineMs = performance.now() + timeoutMs;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   timeout.unref();
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   let verified = false;
   try {
     await mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
     handle = await open(destination, "wx", 0o600);
-    const fetchImpl = options.fetchImpl ?? fetch;
-    let response: Response;
-    try {
-      response = await fetchImpl(artifact.url, {
-        redirect: "follow",
-        cache: "no-store",
-        signal: controller.signal,
-        headers: { "user-agent": "Urma-v1-installer" },
-      });
-    } catch (error) {
-      throw artifactError(`Could not download pinned ${artifact.provider} ${artifact.kind} artifact`, error);
-    }
-    if (!response.ok || response.body === null) {
+    const response = await fetchArtifact(artifact, options.fetchImpl ?? fetch, controller.signal, deadlineMs);
+    if (response.body === null) {
       throw artifactError(`Pinned artifact request failed with HTTP ${String(response.status)} for ${artifact.url}`);
     }
     const contentLength = response.headers.get("content-length")?.trim();
