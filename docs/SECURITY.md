@@ -4,186 +4,148 @@
   <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/docs/assets/security.png" alt="Urma security" width="100%" />
 </p>
 
-Urma's controls assume one user, local Node.js, generation-local native
-executables, and a trusted operating system. They are not an operating-system
-sandbox against a compromised Node process or native executable.
+Urma is intended for one trusted local user. Its controls restrict file access,
+remote destinations, and native-tool execution within the application. They
+assume a trusted operating system, Node.js, FFmpeg, ffprobe, and yt-dlp. Urma
+is not an operating-system sandbox for a compromised executable.
 
 ## Local file boundary
 
-Local input is disabled until `URMA_LOCAL_ROOTS` contains one or more allowed
-roots. For a local video or caption sidecar, Urma:
+Local input is disabled until `URMA_LOCAL_ROOTS` contains an allowed directory.
+For each video or caption sidecar, Urma resolves the file and configured roots
+to canonical paths, checks that the file remains inside a root, and requires
+a regular file. Symlinks and junctions are checked against their resolved
+targets.
 
-1. resolves the requested path and each configured root;
-2. resolves symlinks or junctions to canonical paths;
-3. checks that the canonical file remains inside a canonical allowed root; and
-4. requires a regular file.
+UNC inputs require `URMA_ALLOW_UNC` set to `1` or `true` and must still pass
+the root check. This setting applies to source files only. The installation
+and persistent data directory must be local and accessible to the current
+user. On macOS and Linux, setup also checks that the directory, or its nearest
+existing parent, is owned by that user. Urma does not detect network storage
+behind mapped drives or mount points.
 
-UNC paths are rejected for local input unless `URMA_ALLOW_UNC` is set to `1`
-or `true`. Allowing UNC input does not remove the configured-root check.
-
-The persistent Urma data root must be local and accessible to the current
-user; `URMA_ALLOW_UNC` does not apply to it. On macOS and Linux, setup also
-checks that the root, or its nearest existing parent, is owned by that user.
-Urma does not check whether mapped drives or mount points use network storage.
-
-A local caption sidecar is looked up beside the video as `<basename>.vtt`, then
-`<basename>.srt`. The selected sidecar passes through the same canonical-root
-check and is pinned with the local video content.
-
-Canonical local paths are used internally to resolve and identify a source.
-The public source reference is an opaque hash, and the MCP projection does not
-return the canonical local path.
+Caption sidecars are checked beside the video as `<basename>.vtt`, then
+`<basename>.srt`. The selected file is pinned with the video content and uses
+the same path checks. The MCP response exposes an opaque source reference
+rather than the canonical local path.
 
 ## Installation integrity
 
-`setup` is transactional:
+Setup verifies native archive hashes before extraction. Extraction rejects
+absolute and traversal paths, unsafe names, duplicate or case-colliding
+entries, and symlink escapes.
 
-- The release manifest identifies the target, artifact URL, archive hash,
-  expected contents, binary identity, capability data, and licensing data.
-- Archive hashes are checked before extraction.
-- Extraction rejects absolute paths, drive paths, UNC paths, traversal,
-  unsafe names, duplicate entries, case-colliding entries, and symlink escapes.
-- The staged generation is kept on the installation filesystem and is not
-  selected until the runtime, native tools, receipt, and persisted-runtime MCP
-  smoke test pass.
-- The generation receipt records the installed runtime, native-tool hashes,
-  target, policy data, qualification checks, and provenance hashes.
-- The active selector is written to a temporary file, flushed, and atomically
-  renamed into place.
-- Setup operations use an installation lock and do not overwrite an active
-  generation in place.
+The runtime is staged on the installation filesystem. Before activation, it
+must pass native-tool qualification, receipt checks, and a persisted-runtime
+MCP smoke test. The receipt records installed component hashes, platform and
+policy data, and qualification results.
 
-If a later setup fails, the current active selector remains in use. A retained
-previous generation can be selected by `rollback` after its integrity and
-persistent-state compatibility checks pass. `recover` restores the selector
-stored in `ACTIVE.backup.json`.
+Setup uses an installation lock and writes each version to a separate
+immutable generation. It writes and flushes a temporary active selector before
+atomically replacing `ACTIVE.json`. A failed update leaves the previous
+selection in use.
+
+`rollback` checks the retained installation's integrity and compatibility with
+persistent state before selecting it. `recover` restores the selector saved
+in `ACTIVE.backup.json`. See the [maintenance commands](../README.md#cli-and-maintenance).
 
 ## Runtime integrity
 
-The launcher validates:
+The launcher validates the Node.js version and platform, active selector,
+generation receipt, state schema, and recorded executable paths. Runtime and
+native-tool paths must identify regular files inside the selected generation;
+the recorded Node executable and execution architecture are checked as well.
 
-- a supported Node.js version and the executing platform target;
-- the active selector and generation containment;
-- the generation receipt and state schema version;
-- the runtime entry and native-tool paths inside the selected generation,
-  together with the recorded Node executable and execution architecture; and
-- regular-file requirements.
-
-The runtime does not discover FFmpeg, ffprobe, or yt-dlp through `PATH`. Before
-each native tool is first used in a process, Urma verifies its installed file
-against the receipt hash. The result is cached for that process. A missing or
-modified executable fails the operation; there is no system-binary fallback.
+Packaged runtimes use the selected generation's FFmpeg, ffprobe, and yt-dlp
+paths. Before a native tool is first used in a process, Urma checks its file
+against the receipt hash and caches that result for the process. A missing or
+modified executable fails the operation; Urma does not fall back to a binary
+found on `PATH`.
 
 ## Remote URL and network boundary
 
-Remote input and every remote subresource must use HTTP or HTTPS, contain no
-userinfo, and use the protocol's default port. Local and non-public hostnames
-are rejected. Literal and DNS-resolved addresses are checked against private,
-local, metadata, carrier-grade, link-local, unspecified, multicast,
-documentation, ULA, private IPv4-mapped, and other reserved address ranges.
+Remote sources and their subresources must use HTTP or HTTPS on the default
+port, without embedded credentials. Urma rejects local or non-public hostnames
+and addresses, including private, loopback, link-local, metadata, multicast,
+and reserved ranges. DNS results undergo the same address checks as literal
+IP addresses.
 
-The process-local Safe Proxy listens on `127.0.0.1` and an ephemeral port. It
-supports HTTP forwarding and HTTPS `CONNECT` without terminating TLS. For each
-connection it:
+The process-local Safe Proxy listens on `127.0.0.1` at an ephemeral port. It
+supports HTTP forwarding and HTTPS `CONNECT` without terminating TLS. For
+each connection, it checks the URL, resolves the hostname, validates every
+returned address, and dials a selected validated address directly.
 
-1. parses and checks the URL;
-2. resolves the hostname itself when needed;
-3. validates every returned address; and
-4. dials the selected validated address directly.
+Redirects, delivery URLs, manifests, media fragments, captions, and storyboards
+all use these checks. Accepting a hostname once does not authorize a different
+address on a later resolution. Provider delivery URLs are temporary acquisition
+data and are omitted from public source and artifact records.
 
-The same path is used again for redirects, delivery URLs, HLS or DASH
-manifests and fragments, caption URLs, and storyboard URLs. A hostname that
-was accepted for one request does not authorize a different resolved address.
+Source admission separately checks that the result is one finite video and
+rejects live, upcoming, authentication-required, paywalled, DRM-protected, and
+multi-entry sources. See [Product scope](PRODUCT_SCOPE.md#source-admission).
 
-The source policy also rejects non-video result classes, multi-entry results,
-search/channel/playlist-style extractor results, live or upcoming sources,
-authentication-required or paywalled sources, DRM-protected sources, and
-metadata that exposes no video representation. Finite timeline validation then
-rejects changing HLS or DASH timelines and media without a positive finite
-duration.
-
-Provider delivery URLs are transient acquisition data. They are not included
-in model-facing source or artifact records. The public source identity is a
-versioned source reference, not a delivery URL.
-
-The Safe Proxy is an application-level SSRF boundary for this local threat
-model. A trusted executable can bypass application checks by opening its own
-network connection; preventing that requires operating-system or
-infrastructure isolation outside this package.
+These checks provide an application-level server-side request forgery (SSRF)
+boundary. A compromised trusted executable could open a connection outside
+that path. Preventing such connections requires operating-system or
+infrastructure isolation.
 
 ## Subprocess controls
 
-Urma starts native tools with argument arrays, `shell: false`, hidden child
-windows on Windows, and process-tree cleanup on timeout or cancellation.
+Native tools run with argument arrays, `shell: false`, hidden child windows
+on Windows, and an allowlisted environment. Children do not inherit arbitrary
+application state, credentials, browser profiles, proxy settings, or runtime
+hooks.
 
-Child environments are allowlisted. They do not inherit credentials, browser
-profiles, proxy variables, runtime hooks, or arbitrary application state.
-yt-dlp is invoked with an internal profile that disables configuration files,
-plugins, cookies, external execution, cache, remote components, updates,
-playlist expansion, and uncontrolled retries or concurrency. Its JavaScript
-runtime and FFmpeg location are supplied from the selected generation.
+The yt-dlp invocation disables ambient configuration, plugins, cookies,
+external execution, cache, remote components, updates, playlist expansion,
+and uncontrolled retries or concurrency. Its JavaScript runtime and FFmpeg
+location are supplied from the selected installation.
 
-Remote FFmpeg and ffprobe inputs receive the Safe Proxy explicitly and use the
-restricted protocol set `http,https,tcp,tls,httpproxy`. HTTP(S) operations
-cannot opt out of the proxy through a caller-provided option.
+Remote FFmpeg and ffprobe inputs use an explicit Safe Proxy and the protocol
+list `http,https,tcp,tls,httpproxy`. Caller arguments cannot disable the proxy.
+For filesystem-backed media, Urma opens a read-only regular file and supplies
+a seekable `fd:` input with `-protocol_whitelist fd`. This prevents a local
+manifest from resolving nested file or network references through those
+wrappers. Setup qualifies seeking and frame extraction, including a check
+that a nested DASH file reference is rejected.
 
-Urma opens filesystem-backed media passed through the FFmpeg and ffprobe
-wrappers as read-only regular files. The child receives a seekable `fd:` input
-with `-protocol_whitelist fd`; a manifest cannot resolve another file or a
-network resource. Frame-panel and overview composition use generated or
-validated JPEG frames. Setup checks seeking, frame extraction, and rejection
-of a nested DASH file reference with the selected native tools.
-
-The subprocess runner bounds stdout and stderr, enforces deadlines, and reports
-timeouts, cancellation, output-limit breaches, and non-zero exits as explicit
-errors. A failed subprocess does not become a successful acquisition.
+The subprocess runner bounds stdout and stderr and enforces deadlines.
+Timeouts and cancellation terminate the process tree. Nonzero exits and
+output-limit breaches fail the operation.
 
 ## Acquisition and cache safety
 
-Remote output is bounded while it is written. Targeted media, navigation media,
-reusable evidence media, and remote acquisition wall time have separate
-ceilings. Exceeding a ceiling terminates the process tree, removes temporary
-acquisition data, and prevents a successful cache record.
+Downloads have separate limits for targeted media, navigation media, reusable
+media, and wall time. Exceeding a limit stops the process tree and removes
+temporary acquisition data.
 
-Media must pass video-stream, duration, timing, and size validation before it
-is promoted. JPEG output is checked for valid markers. Caption data is parsed
-before its database transaction; an individual caption cue above the response
-ceiling is rejected.
+Media is checked for video streams, duration, timing, and size before storage.
+JPEG output is checked for valid markers. Captions are parsed before their
+database transaction; a cue larger than the response ceiling is rejected.
+Failed or cancelled acquisition does not create a successful cache record.
 
-Artifacts are stored by SHA-256. Blob writes use temporary files and atomic
-promotion. Reads verify the expected content-addressed path, size, and hash.
-Resource reads fail if an artifact is missing or corrupt. Acquisition paths
-can reacquire invalid cached artifacts; reopening a resource does not itself
-trigger acquisition.
+Artifacts are stored by SHA-256. Writes use temporary files and atomic
+promotion; reads verify the expected path, size, and hash. A missing or corrupt
+artifact fails a resource read. Tool acquisition can replace invalid cached
+content, but reading a resource does not trigger reacquisition.
 
-Equivalent acquisitions share one in-flight operation. Each caller can cancel
-independently. Cancelling one caller does not cancel shared work
-still needed by another; shared work stops after the last observer detaches.
+## MCP integration
 
-## Model-facing data boundary
+Caption text, metadata, and images are untrusted source content. Integrations
+must keep that content separate from instructions when passing results to a
+model. Network validation checks where content comes from; it does not make
+captions truthful or source content appropriate to display.
 
-MCP errors expose a normalized code, retryability flag, and redacted detail.
-URL-shaped diagnostics and local path patterns are redacted before they are
-returned in model-facing error text. Structured tool projections omit internal
-transport fields and raw resolver metadata.
+Tool execution errors include a normalized code, retryability flag, and
+redacted detail. URL-shaped diagnostics and local path patterns are redacted
+from model-facing error text. Public projections omit raw resolver metadata
+and internal transport fields.
 
-Caption text, media, metadata, and images are untrusted source data. Urma
-returns them as evidence data, not instructions for the host. Provider metadata
-can supply delivery and caption URLs; those URLs pass through the remote
-policy and network checks. The host must keep source content separate from
-instructions when interpreting the evidence.
+Artifact resources are available only after the artifact has been returned to
+that investigation. A guessed hash, cached content, or presentation to another
+investigation does not grant access. These checks track returned evidence;
+they do not authenticate users or provide multi-user isolation.
 
-An artifact resource can be read only after the artifact has been presented to
-the requesting investigation. A cached artifact, an artifact presented to a
-different investigation, or a guessed hash does not bypass that authorization.
-
-`URMA_DEBUG` and `URMA_DEBUG_FILE` are opt-in developer diagnostics. A caller
-that enables them is responsible for protecting the selected debug file and
-its operational records.
-
-## Boundary of these controls
-
-Investigation-scoped resource checks track presented evidence; they do not
-isolate different users. Urma has no authentication or hosted multi-tenant
-isolation. Source admission and media validation do not establish that captions
-are truthful or that a video is appropriate to display.
+`URMA_DEBUG` and `URMA_DEBUG_FILE` enable diagnostic logs. Treat those logs as
+sensitive operational data, protect the selected file, and review logs before
+sharing them.
