@@ -50,6 +50,57 @@ function sha256(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+test("debug-disabled MCP responses skip diagnostic content serialization", async (t) => {
+  const data = await fixture();
+  const app = await openUrma(loadConfig({
+    URMA_DATA_DIR: path.join(data.directory, "data"),
+    URMA_LOCAL_ROOTS: data.directory,
+  }));
+  const server = buildMcpServer(app.evidence, app.store, app.blobs, app.config);
+  const client = new Client({ name: "urma-no-diagnostics-test", version: "1.0.0" });
+  t.after(async () => {
+    await client.close();
+    await server.close();
+    app.close();
+    await rm(data.directory, { recursive: true, force: true });
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  const inspection = await client.callTool({
+    name: "inspect_video",
+    arguments: { source: data.video },
+  });
+  assert(inspection.structuredContent);
+  const stringify = JSON.stringify;
+  let contentSerializations = 0;
+  const serialization = t.mock.method(JSON, "stringify", (...args: Parameters<typeof JSON.stringify>) => {
+    const value = args[0] as unknown;
+    const content = Array.isArray(value) ? value
+      : typeof value === "object" && value !== null && "content" in value
+      ? value.content : undefined;
+    if (Array.isArray(content) && content.some((block) =>
+      block?.type === "image" || block?.type === "text"
+    )) contentSerializations += 1;
+    return stringify(...args);
+  });
+  const frames = await client.callTool({
+    name: "get_frames",
+    arguments: {
+      investigationRef: (inspection.structuredContent as Record<string, unknown>).investigationRef,
+      request: { kind: "points", timesMs: [500] },
+    },
+  });
+  const failure = await client.callTool({
+    name: "inspect_video",
+    arguments: { source: "http://127.0.0.1/video" },
+  });
+  serialization.mock.restore();
+  assert.equal(frames.isError, undefined);
+  assert(frames.content.some((block) => block.type === "image"));
+  assert.equal(failure.isError, true);
+  assert.equal(contentSerializations, 0);
+});
+
 test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifact resources", async (t) => {
   const data = await fixture();
   const app = await openUrma(

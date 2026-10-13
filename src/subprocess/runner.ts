@@ -1,5 +1,6 @@
 import {
   spawn,
+  type ChildProcess,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { constants } from "node:fs";
@@ -64,26 +65,76 @@ export function allowlistedEnvironment(
   return output;
 }
 
-function terminateTree(pid: number | undefined): void {
-  if (pid === undefined) return;
+const TASKKILL_TIMEOUT_MS = 2_000;
+const PROCESS_CLEANUP_TIMEOUT_MS = 5_000;
+
+type TerminationResult = Readonly<{ confirmed: boolean; detail: string }>;
+
+function terminateSubprocess(child: ChildProcess, failure: string): TerminationResult {
+  let detail: string;
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+    detail = "the subprocess already exited";
+  } else {
+    try {
+      process.kill(child.pid, "SIGKILL");
+      detail = "a direct subprocess kill was requested";
+    } catch (error) {
+      detail = `the direct subprocess kill failed: ${redactText(String(error))}`;
+    }
+  }
+  return {
+    confirmed: false,
+    detail: `${failure}; ${detail}; descendant termination is unconfirmed`,
+  };
+}
+
+async function terminateTree(child: ChildProcess): Promise<TerminationResult> {
+  const pid = child.pid;
+  if (pid === undefined) return terminateSubprocess(child, "No subprocess PID was available");
   if (process.platform === "win32") {
-    const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
-      shell: false,
-      windowsHide: true,
-      stdio: "ignore",
-    });
-    killer.on("error", () => {
+    const failure = await new Promise<string | null>((resolve) => {
+      let killer: ChildProcess;
       try {
-        process.kill(pid, "SIGKILL");
-      } catch {}
+        killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+          shell: false,
+          windowsHide: true,
+          stdio: "ignore",
+          env: allowlistedEnvironment(),
+        });
+      } catch (error) {
+        resolve(`taskkill could not start: ${redactText(String(error))}`);
+        return;
+      }
+      let finished = false;
+      const finish = (failure: string | null) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        resolve(failure);
+      };
+      const timer = setTimeout(() => {
+        let failure = `taskkill exceeded its ${TASKKILL_TIMEOUT_MS} ms cleanup deadline`;
+        try {
+          killer.kill("SIGKILL");
+        } catch (error) {
+          failure += `; stopping taskkill failed: ${redactText(String(error))}`;
+        }
+        killer.unref();
+        finish(failure);
+      }, TASKKILL_TIMEOUT_MS);
+      killer.once("error", (error) => finish(`taskkill failed: ${redactText(String(error))}`));
+      killer.once("close", (code, signal) => finish(code === 0 ? null
+        : `taskkill exited with ${signal ? `signal ${signal}` : `code ${String(code)}`}`));
     });
+    return failure === null
+      ? { confirmed: true, detail: "taskkill completed successfully" }
+      : terminateSubprocess(child, failure);
   } else {
     try {
       process.kill(-pid, "SIGKILL");
-    } catch {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {}
+      return { confirmed: true, detail: "Process-group termination was requested" };
+    } catch (error) {
+      return terminateSubprocess(child, `Process-group termination failed: ${redactText(String(error))}`);
     }
   }
 }
@@ -189,9 +240,27 @@ export async function runProcess(
       let stderrBytes = 0;
       let reason: "timeout" | "cancelled" | "stdout" | "stderr" | null = null;
       let settled = false;
-      const stop = (next: typeof reason) => {
-        if (reason === null) reason = next;
-        terminateTree(child.pid);
+      let closed = false;
+      let closeCode: number | null = null;
+      let termination: TerminationResult | undefined;
+      let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+      const stop = (next: NonNullable<typeof reason>) => {
+        if (settled || reason !== null) return;
+        reason = next;
+        clearTimeout(timer);
+        cleanupTimer = setTimeout(() => {
+          child.stdout.destroy();
+          child.stderr.destroy();
+          child.unref();
+          finish(child.exitCode, {
+            confirmed: false,
+            detail: `Process-tree cleanup did not complete within ${PROCESS_CLEANUP_TIMEOUT_MS} ms; check for remaining subprocesses before retrying`,
+          });
+        }, PROCESS_CLEANUP_TIMEOUT_MS);
+        void terminateTree(child).then((result) => {
+          termination = result;
+          if (closed) finish(closeCode, result);
+        });
       };
       const timer = setTimeout(() => stop("timeout"), timeoutMs);
       timer.unref();
@@ -199,6 +268,7 @@ export async function runProcess(
       options.signal?.addEventListener("abort", onAbort, { once: true });
       child.stdout.on("data", (chunk: Buffer) => {
         stdoutBytes += chunk.length;
+        if (reason !== null) return;
         if (stdoutBytes > maxStdout) {
           stop("stdout");
           return;
@@ -207,6 +277,7 @@ export async function runProcess(
       });
       child.stderr.on("data", (chunk: Buffer) => {
         stderrBytes += chunk.length;
+        if (reason !== null) return;
         if (stderrBytes > maxStderr) {
           stop("stderr");
           return;
@@ -215,6 +286,7 @@ export async function runProcess(
       });
       const cleanup = () => {
         clearTimeout(timer);
+        clearTimeout(cleanupTimer);
         options.signal?.removeEventListener("abort", onAbort);
       };
       child.once("error", (error) => {
@@ -246,7 +318,7 @@ export async function runProcess(
           ),
         );
       });
-      child.once("close", (code) => {
+      const finish = (code: number | null, terminationResult?: TerminationResult) => {
         if (settled) return;
         settled = true;
         cleanup();
@@ -259,16 +331,30 @@ export async function runProcess(
           wallMs,
           stdoutBytes,
           stderrBytes,
+          ...(terminationResult === undefined ? {} : {
+            terminationConfirmed: terminationResult.confirmed,
+            terminationDetail: terminationResult.detail,
+          }),
         });
         const detail = {
           retryable: true,
-          detail: { executable, args: redactArgs(args) },
+          detail: {
+            executable,
+            args: redactArgs(args),
+            ...(terminationResult === undefined ? {} : {
+              terminationConfirmed: terminationResult.confirmed && closed,
+              terminationDetail: terminationResult.detail,
+            }),
+          },
         };
+        const terminationMessage = terminationResult?.confirmed && closed
+          ? "its process tree was terminated"
+          : terminationResult?.detail ?? "process-tree termination is unconfirmed";
         if (reason === "timeout") {
           reject(
             new UrmaError(
               "MEDIA_ACQUISITION_TIMEOUT",
-              `${executable} exceeded its ${timeoutMs} ms timeout and its process tree was terminated`,
+              `${executable} exceeded its ${timeoutMs} ms timeout; ${terminationMessage}`,
               detail,
             ),
           );
@@ -276,7 +362,7 @@ export async function runProcess(
           reject(
             new UrmaError(
               "CANCELLED",
-              `${executable} was cancelled and its process tree was terminated`,
+              `${executable} was cancelled; ${terminationMessage}`,
               detail,
             ),
           );
@@ -286,7 +372,7 @@ export async function runProcess(
               "OUTPUT_LIMIT_EXCEEDED",
               `${executable} ${reason} exceeded its ${
                 reason === "stdout" ? maxStdout : maxStderr
-              }-byte safety limit and its process tree was terminated`,
+              }-byte safety limit; ${terminationMessage}`,
               detail,
             ),
           );
@@ -300,6 +386,11 @@ export async function runProcess(
             wallMs,
           });
         }
+      };
+      child.once("close", (code) => {
+        closed = true;
+        closeCode = code;
+        if (reason === null || termination !== undefined) finish(code, termination);
       });
     });
   } finally {
