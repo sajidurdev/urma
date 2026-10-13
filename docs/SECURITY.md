@@ -110,8 +110,9 @@ wrappers. Setup qualifies seeking and frame extraction, including a check
 that a nested DASH file reference is rejected.
 
 The subprocess runner bounds stdout and stderr and enforces deadlines.
-Timeouts and cancellation terminate the process tree. Nonzero exits and
-output-limit breaches fail the operation.
+Timeouts and cancellation request process-tree termination. Cleanup waits are
+bounded; errors distinguish completed termination from an unconfirmed fallback.
+Nonzero exits and output-limit breaches fail the operation.
 
 ## Acquisition and cache safety
 

@@ -152,8 +152,8 @@ export async function withRemoteAcquisitionDirectory<T>(
       throw new UrmaError(
         "MEDIA_BUDGET_EXCEEDED",
         exceeded === "total"
-          ? `Remote acquisition exceeded its ${budgetBytes}-byte hard acquisition budget; the process tree was terminated and temporary output was discarded`
-          : `Remote acquisition emitted one file larger than its ${fileBudgetBytes}-byte per-artifact hard acquisition budget; the process tree was terminated and temporary output was discarded`,
+          ? `Remote acquisition exceeded its ${budgetBytes}-byte hard acquisition budget; temporary output was discarded`
+          : `Remote acquisition emitted one file larger than its ${fileBudgetBytes}-byte per-artifact hard acquisition budget; temporary output was discarded`,
       );
     }
     if (failure !== undefined) throw failure;
