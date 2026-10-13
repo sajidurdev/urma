@@ -90,14 +90,16 @@ function success(
   const exposed = publicSchema.parse(projected) as Record<string, unknown>;
   const content = extra;
   const result = { content, structuredContent: exposed };
-  diagnosticLog(debug, "mcp-result", {
-    tool,
-    status: "succeeded",
-    investigationRef: investigationRefFromOutput(exposed),
-    structuredBytes: Buffer.byteLength(JSON.stringify(exposed), "utf8"),
-    contentBytes: jsonBytes(content),
-    resultBytes: jsonBytes(result),
-  });
+  if (debug) {
+    diagnosticLog(debug, "mcp-result", {
+      tool,
+      status: "succeeded",
+      investigationRef: investigationRefFromOutput(exposed),
+      structuredBytes: Buffer.byteLength(JSON.stringify(exposed), "utf8"),
+      contentBytes: jsonBytes(content),
+      resultBytes: jsonBytes(result),
+    });
+  }
   return result;
 }
 function failure(tool: string, debug: boolean, error: unknown): CallToolResult {
@@ -111,15 +113,17 @@ function failure(tool: string, debug: boolean, error: unknown): CallToolResult {
     isError: true as const,
     content: [{ type: "text" as const, text: JSON.stringify(output) }],
   };
-  diagnosticLog(debug, "mcp-result", {
-    tool,
-    status: "failed",
-    investigationRef: null,
-    errorCode: normalized.code,
-    structuredBytes: 0,
-    contentBytes: jsonBytes(result.content),
-    resultBytes: jsonBytes(result),
-  });
+  if (debug) {
+    diagnosticLog(debug, "mcp-result", {
+      tool,
+      status: "failed",
+      investigationRef: null,
+      errorCode: normalized.code,
+      structuredBytes: 0,
+      contentBytes: jsonBytes(result.content),
+      resultBytes: jsonBytes(result),
+    });
+  }
   return result;
 }
 function scalar(value: string | string[] | undefined, label: string): string {
