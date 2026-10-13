@@ -15,7 +15,6 @@
   "files": [
     "dist/src",
     "launcher-v1.mjs",
-    "docs/*.md",
     "README.md",
     "assets/urma-logo.png"
   ],

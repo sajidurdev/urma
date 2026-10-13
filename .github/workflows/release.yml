@@ -208,13 +208,10 @@ jobs:
           for (const file of required) {
             if (!files.has(file)) throw new Error(`Packed artifact is missing ${file}`);
           }
-          if (![...files].some((file) => file.startsWith("package/docs/"))) {
-            throw new Error("Packed artifact is missing docs/");
-          }
           if (files.has("package/assets/urma-banner.png")) {
             throw new Error("Packed artifact contains the documentation banner");
           }
-          for (const prefix of ["package/src/", "package/tests/", "package/compat/", "package/scripts/", "package/docs/assets/"]) {
+          for (const prefix of ["package/src/", "package/tests/", "package/compat/", "package/scripts/", "package/docs/"]) {
             if ([...files].some((file) => file.startsWith(prefix))) {
               throw new Error(`Packed artifact contains excluded path ${prefix}`);
             }
