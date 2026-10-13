@@ -40,7 +40,7 @@ For example, replace `<video URL>` in this prompt with a public product demo:
 > enabled on screen? `<video URL>`
 
 For a local file, [allow its directory](#local-videos) first. See
-[supported sources](docs/PRODUCT_SCOPE.md#source-admission) for provider and
+[supported sources](https://github.com/sajidurdev/urma/blob/main/docs/PRODUCT_SCOPE.md#source-admission) for provider and
 format limitations.
 
 ## Install and connect a host
@@ -163,7 +163,7 @@ search uses source-provided captions; Urma does not transcribe audio. Overviews
 and frame requests show selected moments, so brief events between samples can
 be missed.
 
-The [tool reference](docs/EVIDENCE_MODEL.md) covers all arguments, pagination,
+The [tool reference](https://github.com/sajidurdev/urma/blob/main/docs/EVIDENCE_MODEL.md) covers all arguments, pagination,
 result fields, and timing guarantees.
 
 ## Configuration
@@ -214,7 +214,7 @@ integer values; byte limits use bytes and the timeout uses milliseconds.
 
 Inline image responses have a fixed 8 MiB ceiling, and resource reads have a
 fixed 32 MiB ceiling. Tool-specific caption and sampling limits are listed in
-the [tool reference](docs/EVIDENCE_MODEL.md).
+the [tool reference](https://github.com/sajidurdev/urma/blob/main/docs/EVIDENCE_MODEL.md).
 
 ## CLI and maintenance
 
@@ -273,7 +273,7 @@ Remove credentials, private URLs, and personal paths before posting logs.
 
 Urma restricts local files to configured roots, validates remote destinations,
 and verifies its managed native tools. It is intended for one trusted local
-user. See [Security](docs/SECURITY.md) for the controls, assumptions, and MCP
+user. See [Security](https://github.com/sajidurdev/urma/blob/main/docs/SECURITY.md) for the controls, assumptions, and MCP
 integration considerations.
 
 ## Development
@@ -286,16 +286,16 @@ pnpm install --frozen-lockfile
 pnpm check
 ```
 
-See [Contributing](docs/CONTRIBUTING.md) for native-tool prerequisites, code
+See [Contributing](https://github.com/sajidurdev/urma/blob/main/docs/CONTRIBUTING.md) for native-tool prerequisites, code
 structure, and validation commands.
 
 ## Documentation
 
-- [Product scope](docs/PRODUCT_SCOPE.md): supported sources and limitations.
-- [Tool reference](docs/EVIDENCE_MODEL.md): arguments, results, and examples.
-- [Architecture](docs/ARCHITECTURE.md): source snapshots, acquisition, caching, and installation design.
-- [Security](docs/SECURITY.md): filesystem, network, subprocess, and resource boundaries.
-- [Contributing](docs/CONTRIBUTING.md): development setup and contribution guidelines.
+- [Product scope](https://github.com/sajidurdev/urma/blob/main/docs/PRODUCT_SCOPE.md): supported sources and limitations.
+- [Tool reference](https://github.com/sajidurdev/urma/blob/main/docs/EVIDENCE_MODEL.md): arguments, results, and examples.
+- [Architecture](https://github.com/sajidurdev/urma/blob/main/docs/ARCHITECTURE.md): source snapshots, acquisition, caching, and installation design.
+- [Security](https://github.com/sajidurdev/urma/blob/main/docs/SECURITY.md): filesystem, network, subprocess, and resource boundaries.
+- [Contributing](https://github.com/sajidurdev/urma/blob/main/docs/CONTRIBUTING.md): development setup and contribution guidelines.
 
 ## License
 
