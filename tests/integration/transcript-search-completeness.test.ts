@@ -1,4 +1,4 @@
-import { putTestSource } from "../support/source-fixture.js";
+import { putTestSource, vttForSegments } from "../support/source-fixture.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -132,9 +132,7 @@ async function fixture(
         text,
         ordinal,
       }));
-    const blob = await app.blobs.put(
-      Buffer.from(`fixture caption ${track.trackRef}`),
-    );
+    const blob = await app.blobs.put(Buffer.from(vttForSegments(segments)));
     app.store.putTranscript(
       {
         id: trackId,

@@ -63,6 +63,14 @@ Urma uses source-provided captions and local sidecars. Supported formats are
 JSON3, WebVTT, and SRT. It does not transcribe audio, merge tracks, translate
 captions, or correct automatic captions.
 
+Each track's caption bytes are pinned on its first successful acquisition for
+a source snapshot. A missing or corrupt cache entry can be repaired with
+identical bytes. Changed downloads or inconsistent existing caption caches
+fail with `SOURCE_UNAVAILABLE`; inspect with `freshness: "refresh"` and use
+the new investigation. This pin starts when captions are acquired, so it does
+not guarantee that a first remote caption download matches the provider's
+content at inspection time.
+
 Both caption tools accept an optional `trackRef` from `inspect_video`. When
 omitted, Urma prefers manual captions, then local sidecars, automatic captions,
 and tracks of unknown kind. Within each kind it prefers the original language,

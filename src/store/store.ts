@@ -135,6 +135,7 @@ export interface UrmaStore {
   getInvestigation(
     investigationRef: InvestigationRef,
   ): StoredInvestigation | null;
+  /** Pin a track's cues and content; identical retries preserve the original rows. */
   putTranscript(
     track: StoredTrack,
     segments: readonly Omit<StoredSegment, "id">[],

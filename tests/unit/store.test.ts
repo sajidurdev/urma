@@ -18,12 +18,45 @@ import { Singleflight } from "../../src/acquisition/singleflight.js";
 import { deriveInvestigationState } from "../../src/evidence/state.js";
 import { materializeResolvedSource } from "../../src/sources/resolver.js";
 import { SCHEMA_VERSION } from "../../src/store/schema.js";
+import { UrmaError } from "../../src/core/errors.js";
 
 async function fixture(t: test.TestContext) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "urma-store-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
+
+test("caption pins and cues survive conflicting writes from another store connection", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "urma-store-pins-"));
+  const database = path.join(directory, "urma.db");
+  const store = await SqliteStore.open(database);
+  const other = await SqliteStore.open(database);
+  t.after(async () => {
+    other.close();
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const sourceRef = remoteSourceRef(youtubeRemoteIdentity("aaaaaaaaaaa"));
+  putTestSource(store, { sourceRef, kind: "remote", canonicalKey: "aaaaaaaaaaa", revision: "r1", title: "Pinned captions", durationMs: 2_000, metadata: {} });
+  const pinned = artifactIdFromSha256(sha256("original bytes"));
+  const track = {
+    id: "pinned-track", sourceRef, sourceRevision: "r1", language: "en", kind: "manual" as const,
+    providerTrackId: null, acquiredAt: new Date(0).toISOString(), metadata: { captionArtifactId: pinned },
+  };
+  const cues = [
+    { trackId: track.id, startMs: 0, endMs: 1_000, text: "original", ordinal: 0 },
+    { trackId: track.id, startMs: 1_000, endMs: 2_000, text: "second", ordinal: 1 },
+  ];
+  store.putTranscript(track, cues);
+  const before = store.listTranscriptSegments(track.id);
+  const conflict = (error: unknown) => error instanceof UrmaError && error.code === "SOURCE_UNAVAILABLE" && error.detail.refreshRequired === true;
+  assert.throws(() => other.putTranscript({ ...track, metadata: { captionArtifactId: artifactIdFromSha256(sha256("changed bytes")) } }, cues), conflict);
+  assert.throws(() => other.putTranscript(track, [{ ...cues[0]!, text: "revised" }, cues[1]!]), conflict);
+  assert.throws(() => other.putTranscript({ ...track, metadata: {} }, cues), conflict);
+  other.putTranscript({ ...track, acquiredAt: new Date(1_000).toISOString() }, [...cues].reverse());
+  assert.deepEqual(store.listTranscriptSegments(track.id), before);
+  assert.equal(store.listTranscriptTracks(sourceRef, "r1")[0]?.acquiredAt, track.acquiredAt);
+});
 
 test("SQLite source cache persists while investigations remain isolated across restart", async (t) => {
   const directory = await fixture(t);

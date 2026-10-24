@@ -551,10 +551,42 @@ export class SqliteStore implements UrmaStore {
     segments: readonly Omit<StoredSegment, "id">[],
   ): void {
     this.#transaction(() => {
+      const previous = this.#db.prepare("SELECT * FROM transcript_tracks WHERE id=?")
+        .get(track.id) as DbRow | undefined;
+      if (previous) {
+        const stored = trackFromRow(previous);
+        const pinned = stored.metadata.captionArtifactId;
+        const existing = this.#all(
+          this.#db.prepare("SELECT * FROM transcript_segments WHERE track_id=? ORDER BY ordinal"),
+          track.id,
+        ).map(segmentFromRow);
+        const ordered = [...segments].sort((left, right) => left.ordinal - right.ordinal);
+        const sameCues = existing.length === ordered.length && existing.every((cue, index) => {
+          const next = ordered[index]!;
+          return cue.trackId === next.trackId && cue.startMs === next.startMs &&
+            cue.endMs === next.endMs && cue.text === next.text && cue.ordinal === next.ordinal;
+        });
+        if (
+          stored.sourceRef !== track.sourceRef || stored.sourceRevision !== track.sourceRevision ||
+          stored.language !== track.language || stored.kind !== track.kind ||
+          stored.providerTrackId !== track.providerTrackId || !sameCues ||
+          (pinned !== undefined && pinned !== track.metadata.captionArtifactId)
+        ) {
+          throw new UrmaError(
+            "SOURCE_UNAVAILABLE",
+            `Caption track ${track.id} conflicts with its pinned content; inspect the source with freshness=refresh and use the new investigation`,
+            { detail: { refreshRequired: true, reason: "caption-snapshot-conflict" } },
+          );
+        }
+        if (pinned === undefined && track.metadata.captionArtifactId !== undefined) {
+          this.#db.prepare("UPDATE transcript_tracks SET metadata_json=? WHERE id=?")
+            .run(JSON.stringify({ ...stored.metadata, captionArtifactId: track.metadata.captionArtifactId }), track.id);
+        }
+        return;
+      }
       this.#db
         .prepare(
-          `INSERT INTO transcript_tracks(id,source_id,source_revision,language,kind,provider_track_id,acquired_at,metadata_json) VALUES(?,?,?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET acquired_at=excluded.acquired_at,metadata_json=excluded.metadata_json`,
+          "INSERT INTO transcript_tracks(id,source_id,source_revision,language,kind,provider_track_id,acquired_at,metadata_json) VALUES(?,?,?,?,?,?,?,?)",
         )
         .run(
           track.id,
@@ -566,9 +598,6 @@ export class SqliteStore implements UrmaStore {
           track.acquiredAt,
           JSON.stringify(track.metadata),
         );
-      this.#db
-        .prepare("DELETE FROM transcript_segments WHERE track_id=?")
-        .run(track.id);
       const insert = this.#db.prepare(
         "INSERT INTO transcript_segments(track_id,start_ms,end_ms,text,ordinal) VALUES(?,?,?,?,?)",
       );

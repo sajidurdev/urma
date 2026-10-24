@@ -3,7 +3,7 @@ import path from "node:path";
 import type { UrmaConfig } from "../config.js";
 import { UrmaError } from "../core/errors.js";
 import { deterministicRequestKey } from "../core/request-key.js";
-import { parseTrackRef } from "../core/ids.js";
+import { artifactIdFromSha256, parseTrackRef, sha256 } from "../core/ids.js";
 import type { InvestigationRef, TrackRef } from "../core/ids.js";
 import type { TranscriptKind } from "../core/model.js";
 import { BlobStore } from "../store/blob-store.js";
@@ -194,6 +194,22 @@ export function transcriptTrackId(trackRef: TrackRef): string {
   return `track:${trackRef.slice("urma:track:".length)}`;
 }
 
+function parseCaptions(body: string, extension: string, trackId: string) {
+  return extension === ".json3"
+    ? parseJson3Captions(body, trackId)
+    : extension === ".srt"
+    ? parseSrtCaptions(body, trackId)
+    : parseVttCaptions(body, trackId);
+}
+
+function captionSnapshotConflict(trackRef: TrackRef, reason: string, cause?: unknown): UrmaError {
+  return new UrmaError(
+    "SOURCE_UNAVAILABLE",
+    `Caption track ${trackRef} no longer matches its pinned content; inspect the source with freshness=refresh and use the new investigation`,
+    { detail: { refreshRequired: true, reason }, ...(cause === undefined ? {} : { cause }) },
+  );
+}
+
 export class TranscriptAcquirer {
   constructor(
     readonly config: UrmaConfig,
@@ -217,17 +233,57 @@ export class TranscriptAcquirer {
     const cached = this.store
       .listTranscriptTracks(source.sourceRef, source.revision)
       .find((track) => track.id === trackId);
+    const artifacts = this.store.listArtifacts(source.sourceRef, source.revision)
+      .filter((item) => item.kind === "caption" && item.params.trackId === trackId);
+    const storedPin = cached?.metadata.captionArtifactId;
+    if (storedPin !== undefined && (typeof storedPin !== "string" || !/^urma:artifact:sha256:[a-f0-9]{64}$/u.test(storedPin))) {
+      throw captionSnapshotConflict(selected.trackRef, "caption-binding-invalid");
+    }
+    const candidates = [...new Set(artifacts.map((item) => item.artifactId))];
+    if (storedPin === undefined && candidates.length > 1) {
+      throw captionSnapshotConflict(selected.trackRef, "caption-artifacts-conflict");
+    }
+    const localPin = source.kind === "local"
+      ? parseLocalSnapshot(source.safeMetadata.localSnapshot)?.caption?.artifactId
+      : undefined;
+    const expectedId = storedPin ?? localPin ?? candidates[0];
+    if (cached && expectedId === undefined) {
+      throw captionSnapshotConflict(selected.trackRef, "caption-binding-missing");
+    }
+    if (localPin !== undefined && expectedId !== localPin) {
+      throw captionSnapshotConflict(selected.trackRef, "caption-binding-conflict");
+    }
     if (cached) {
-      const artifacts = this.store.listArtifacts(
-        source.sourceRef,
-        source.revision,
-      );
-      const artifact = artifacts.find(
-        (item) => item.kind === "caption" && item.params.trackId === cached.id,
-      );
+      const artifact = artifacts.find((item) => item.artifactId === expectedId);
       if (artifact) {
+        let legacyBytes: Buffer | undefined;
+        let valid = false;
         try {
-          await this.blobs.verify(artifact.artifactId, artifact.blobPath);
+          if (storedPin === undefined) {
+            legacyBytes = await this.blobs.read(artifact.artifactId, artifact.blobPath, this.config.limits.resourceBytes);
+          } else {
+            await this.blobs.verify(artifact.artifactId, artifact.blobPath);
+          }
+          valid = true;
+        } catch (error) {
+          if (!(error instanceof UrmaError) || error.code !== "MEDIA_INVALID") throw error;
+        }
+        if (valid) {
+          if (legacyBytes !== undefined) {
+            const extension = artifact.mimeType === "application/json" ? ".json3"
+              : artifact.mimeType === "application/x-subrip" ? ".srt"
+              : artifact.mimeType === "text/vtt" ? ".vtt" : null;
+            if (extension === null) throw captionSnapshotConflict(selected.trackRef, "caption-format-invalid");
+            let parsed: ReturnType<typeof parseCaptions>;
+            try {
+              parsed = parseCaptions(legacyBytes.toString("utf8"), extension, trackId);
+            } catch (error) {
+              throw captionSnapshotConflict(selected.trackRef, "caption-cache-invalid", error);
+            }
+            this.store.putTranscript({
+              ...cached, metadata: { ...cached.metadata, captionArtifactId: artifact.artifactId },
+            }, parsed);
+          }
           const acquisition = startAcquisition(this.store, {
             sourceRef: source.sourceRef,
             sourceRevision: source.revision,
@@ -253,7 +309,6 @@ export class TranscriptAcquirer {
             artifact,
             cacheHit: true,
           };
-        } catch {
         }
       }
     }
@@ -374,11 +429,10 @@ export class TranscriptAcquirer {
         body = bytes.toString("utf8");
         extension = downloaded.extension;
       }
-      const parsed = extension === ".json3"
-        ? parseJson3Captions(body, trackId)
-        : extension === ".srt"
-        ? parseSrtCaptions(body, trackId)
-        : parseVttCaptions(body, trackId);
+      if (expectedId !== undefined && artifactIdFromSha256(sha256(bytes)) !== expectedId) {
+        throw captionSnapshotConflict(selected.trackRef, "caption-content-changed");
+      }
+      const parsed = parseCaptions(body, extension, trackId);
       if (parsed.length === 0) {
         throw new UrmaError(
           "CAPTIONS_UNAVAILABLE",
@@ -413,6 +467,7 @@ export class TranscriptAcquirer {
           segmentCount: parsed.length,
           trackRef: selected.trackRef,
           displayName: selected.displayName,
+          captionArtifactId: blob.artifactId,
         },
       };
       this.store.putTranscript(track, parsed);

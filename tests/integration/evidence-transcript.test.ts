@@ -1,4 +1,4 @@
-import { putTestSource } from "../support/source-fixture.js";
+import { putTestSource, vttForSegments } from "../support/source-fixture.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -583,9 +583,7 @@ test("multilingual tracks are exposed, explicitly selectable, cursor-bound, and 
           text: `${label} ${ordinal}`,
           ordinal,
         }));
-        const body = Buffer.from(
-          `WEBVTT\n\n00:00:00.000 --> 00:00:00.090\n${label}\n`,
-        );
+        const body = Buffer.from(vttForSegments(segments));
         const blob = await app.blobs.put(body);
         const now = new Date(0).toISOString();
         app.store.putTranscript(
