@@ -12,6 +12,7 @@ import {
 import {
   createOrderedVisualSet,
   largestUnsampledGaps,
+  summarizeSamplingGaps,
   uniformPointsMs,
 } from "../../src/core/coverage.js";
 import { Singleflight } from "../../src/acquisition/singleflight.js";
@@ -69,6 +70,60 @@ test("remaining gaps derive only from presented point timestamps", () => {
   assert.deepEqual(largestUnsampledGaps(10_000, [2_000, 8_000], 2), [
     { startMs: 2_000, endMs: 8_000 },
     { startMs: 0, endMs: 2_000 },
+  ]);
+});
+
+test("sampling gaps include scoped boundaries and sort reported points without changing them", () => {
+  const points = [6_000, 3_000, 6_000, 0, 10_000];
+  assert.deepEqual(summarizeSamplingGaps(1_000, 10_000, points, "nominal"), {
+    scope: "response",
+    interval: { startMs: 1_000, endMs: 10_000 },
+    timestampBasis: "nominal",
+    largestGaps: [
+      { startMs: 6_000, endMs: 10_000, durationSeconds: 4 },
+      { startMs: 3_000, endMs: 6_000, durationSeconds: 3 },
+      { startMs: 1_000, endMs: 3_000, durationSeconds: 2 },
+    ],
+  });
+  assert.deepEqual(points, [6_000, 3_000, 6_000, 0, 10_000]);
+});
+
+test("sampling gaps handle no returned frames, tiny scopes, and safe integer boundaries", () => {
+  const cases: [number, number, number[], unknown][] = [
+    [1_000, 3_000, [], [
+      { startMs: 1_000, endMs: 3_000, durationSeconds: 2 },
+    ]],
+    [1_000, 1_001, [1_000], [
+      { startMs: 1_000, endMs: 1_001, durationSeconds: 0.001 },
+    ]],
+    [Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER, [], [
+      {
+        startMs: Number.MAX_SAFE_INTEGER - 1,
+        endMs: Number.MAX_SAFE_INTEGER,
+        durationSeconds: 0.001,
+      },
+    ]],
+  ];
+  for (const [startMs, endMs, points, expected] of cases) {
+    const summary = summarizeSamplingGaps(startMs, endMs, points, "requested");
+    assert.equal(summary.timestampBasis, "requested");
+    assert.deepEqual(summary.largestGaps, expected);
+  }
+  assert.throws(
+    () => summarizeSamplingGaps(1, 1, [], "requested"), /startMs < endMs/,
+  );
+});
+
+test("sampling gaps return at most five intervals with earlier ties first", () => {
+  const summary = summarizeSamplingGaps(
+    0, 8_000, [7_000, 6_000, 5_000, 4_000, 3_000, 2_000, 1_000, 0], "requested",
+  );
+  assert.deepEqual(summary.largestGaps, [
+    { startMs: 0, endMs: 1_000, durationSeconds: 1 },
+    { startMs: 1_000, endMs: 2_000, durationSeconds: 1 },
+    { startMs: 2_000, endMs: 3_000, durationSeconds: 1 },
+    { startMs: 3_000, endMs: 4_000, durationSeconds: 1 },
+    { startMs: 4_000, endMs: 5_000, durationSeconds: 1 },
   ]);
 });
 

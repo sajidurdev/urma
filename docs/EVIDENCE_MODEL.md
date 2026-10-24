@@ -202,6 +202,14 @@ range requested. `observedCoverage.sampleTimestampsMs` records the returned
 samples, and `adjacentSpacingMs` records the gaps between them. Coverage is
 `sample-points-only`, with `continuous: false`.
 
+`samplingGaps` reports up to five largest gaps in the requested interval,
+considering both the gaps between samples and the interval edges. Each gap has
+source-global `startMs` and `endMs` bounds and a `durationSeconds` value. Gaps are
+ordered by decreasing duration, with earlier gaps first on ties.
+`scope: "response"` means only this response's samples contribute; samples from
+earlier calls do not fill its gaps.
+For overviews, `timestampBasis: "nominal"` identifies the reported sample times.
+
 Current overview timestamps are nominal sample times. An overview is useful
 for finding a likely scene; requesting exact frames at its timestamps is a
 separate operation. Cell spacing does not guarantee observation of the video
@@ -262,6 +270,11 @@ time. A target need not coincide with a video's frame boundary. Returned
 `atMs`, `timestampMs`, and `requestedAtMs` values record the requested times;
 they are not measured decoder presentation timestamps.
 
+Frame responses also include `samplingGaps`, with `timestampBasis: "requested"`.
+For bursts, its interval is the requested range. Explicit point requests have
+no range, so the interval is the whole source. These are gaps between requested
+times of returned frames, not measured gaps between decoder presentation times.
+
 With `individual`, the result contains each JPEG and its resource link. With
 `panel`, the result contains one combined JPEG with timestamp labels and links
 to the individual frame artifacts. A panel preserves request order and is
@@ -310,6 +323,11 @@ To continue, pass the investigation and returned cursor without a new request:
 Include `presentation: "panel"` on each call if you want panels. A cadence page
 gets a panel only when every slot on that page succeeds. Error and unfinished
 slots remain visible in the result and have no frame artifact.
+
+For cadence, `samplingGaps.interval` is the full schedule interval, while only
+successful slots from the current page contribute sample points. Failed,
+unfinished, earlier-page, and future-page targets do not fill those gaps. A page
+with no successful frames reports the whole schedule interval as one gap.
 
 Cursors are signed for the running server process. A cursor from another
 investigation or incompatible snapshot is rejected. After a server restart,

@@ -20,6 +20,7 @@ import {
   assertInterval,
   assertMs,
   OVERVIEW_CELL_COUNT,
+  summarizeSamplingGaps,
   uniformPointsMs,
 } from "../core/coverage.js";
 import {
@@ -1305,6 +1306,9 @@ export class EvidenceService {
         requestedInterval: { startMs, endMs },
         timebase: "source-global" as const,
         observedCoverage,
+        samplingGaps: summarizeSamplingGaps(
+          startMs, endMs, overview.pointsMs, "nominal",
+        ),
         sampling: {
           requestedCount: OVERVIEW_CELL_COUNT,
           requestedPointsMs: overview.requestedPointsMs,
@@ -1696,6 +1700,12 @@ export class EvidenceService {
         kind: "scheduled_exact_points" as const,
         continuous: false as const,
         observations: "discrete-points" as const,
+        samplingGaps: summarizeSamplingGaps(
+          schedule.startMs,
+          schedule.endMs,
+          successfulOutcomes.map((outcome) => outcome.atMs),
+          "requested",
+        ),
         schedule: {
           kind: "fixed-cadence" as const,
           startMs: schedule.startMs,
@@ -2033,10 +2043,19 @@ export class EvidenceService {
             const kind = input.request.kind === "points"
               ? ("exact_points" as const)
               : ("ordered_points" as const);
+            const samplingGaps = summarizeSamplingGaps(
+              input.request.kind === "points" ? 0 : input.request.startMs,
+              input.request.kind === "points"
+                ? source.durationMs
+                : input.request.endMs,
+              frames.map((frame) => frame.atMs),
+              "requested",
+            );
             if (!panel) {
               return {
                 kind,
                 continuousMotion: false,
+                samplingGaps,
                 frames: frames.map((frame, index) => ({
                   index,
                   atMs: frame.atMs,
@@ -2055,6 +2074,7 @@ export class EvidenceService {
             return {
               kind,
               continuousMotion: false,
+              samplingGaps,
               presentation: "panel" as const,
               cells: frames.map((frame, index) => ({
                 index: index + 1,

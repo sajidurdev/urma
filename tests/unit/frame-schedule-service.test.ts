@@ -303,6 +303,18 @@ test("cadence pages derive stable targets and allow page-size changes", async (t
   );
   assert.equal(second.schedule.startMs, first.schedule.startMs);
   assert.equal(second.schedule.cadenceMs, first.schedule.cadenceMs);
+  assert.deepEqual(second.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 0, endMs: 30_000 },
+    timestampBasis: "requested",
+    largestGaps: [
+      { startMs: 16_000, endMs: 30_000, durationSeconds: 14 },
+      { startMs: 0, endMs: 12_000, durationSeconds: 12 },
+      { startMs: 12_000, endMs: 13_000, durationSeconds: 1 },
+      { startMs: 13_000, endMs: 14_000, durationSeconds: 1 },
+      { startMs: 14_000, endMs: 15_000, durationSeconds: 1 },
+    ],
+  });
   assert.notEqual(second.nextCursor, first.nextCursor);
   const replay = scheduleOutput(
     await ctx.service.getFrames({
@@ -433,6 +445,16 @@ test("cadence slots retain target errors and resume from the first unfinished in
     first.slots.map((slot) => slot.status),
     ["success", "success", "error", "unfinished", "success"],
   );
+  assert.deepEqual(first.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 0, endMs: 8_000 },
+    timestampBasis: "requested",
+    largestGaps: [
+      { startMs: 4_000, endMs: 8_000, durationSeconds: 4 },
+      { startMs: 1_000, endMs: 4_000, durationSeconds: 3 },
+      { startMs: 0, endMs: 1_000, durationSeconds: 1 },
+    ],
+  });
   assert.equal(first.scheduleComplete, false);
   assert.equal(first.continuationFrontier, 3);
   assert.equal(first.remainingTargetCount, 5);
@@ -453,6 +475,38 @@ test("cadence slots retain target errors and resume from the first unfinished in
   assert.equal(second.counts.errors, 0);
   assert.equal(second.scheduleComplete, true);
   assert.equal(second.nextCursor, null);
+});
+
+test("cadence gaps cover the schedule when a page returns no frames", async (t) => {
+  const ctx = await fixture(t);
+  ctx.errors.set(1_000, new UrmaError("FRAME_EXTRACTION_FAILED", "bad target"));
+  ctx.errors.set(2_000, new UrmaError("FRAME_EXTRACTION_FAILED", "bad target"));
+  const input = {
+    investigationRef: ctx.ref,
+    request: {
+      kind: "cadence" as const,
+      startMs: 1_000,
+      endMs: 3_000,
+      cadenceMs: 1_000,
+    },
+  };
+  const failed = scheduleOutput(await ctx.service.getFrames(input));
+  assert.equal(failed.counts.successes, 0);
+  assert.equal(failed.counts.errors, 2);
+  assert.deepEqual(failed.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 1_000, endMs: 3_000 },
+    timestampBasis: "requested",
+    largestGaps: [{ startMs: 1_000, endMs: 3_000, durationSeconds: 2 }],
+  });
+  ctx.errors.clear();
+  ctx.setUnfinishedAt(1_000);
+  const unfinished = scheduleOutput(
+    await ctx.service.getFrames({ ...input, pageSize: 1 }),
+  );
+  assert.equal(unfinished.counts.successes, 0);
+  assert.equal(unfinished.counts.unfinished, 1);
+  assert.deepEqual(unfinished.samplingGaps, failed.samplingGaps);
 });
 
 test("cadence cursors reject tampering instead of rebinding evidence", async (t) => {

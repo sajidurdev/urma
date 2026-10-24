@@ -25,6 +25,14 @@ const ms = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const positiveMs = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
 const interval = z.object({ startMs: ms, endMs: ms });
 const gap = z.object({ startMs: ms, endMs: ms });
+const samplingGaps = z.object({
+  scope: z.literal("response"),
+  interval,
+  timestampBasis: z.enum(["nominal", "requested"]),
+  largestGaps: z.array(gap.extend({
+    durationSeconds: z.number().positive().max(Number.MAX_SAFE_INTEGER / 1_000),
+  })).min(1).max(5),
+});
 
 const overviewProvenance = z.object({
   kind: z.enum(["storyboard", "decoded"]),
@@ -327,6 +335,7 @@ export const overviewOutput = z.object({
   timebase: z.literal("source-global"),
   observedCoverage: overviewObservedCoverage,
   sampling: overviewSampling,
+  samplingGaps,
   cells: z.array(overviewCell).min(1).max(12),
   source: z.enum(["native-storyboard", "navigation-media"]),
   artifact: z.object({
@@ -439,6 +448,7 @@ const canonicalFrame = z.object({
 const individualFramesOutput = z.object({
   kind: z.enum(["exact_points", "ordered_points"]),
   continuousMotion: z.literal(false),
+  samplingGaps,
   frames: z
     .array(
       z.object({
@@ -455,6 +465,7 @@ const individualFramesOutput = z.object({
 const panelFramesOutput = z.object({
   kind: z.enum(["exact_points", "ordered_points"]),
   continuousMotion: z.literal(false),
+  samplingGaps,
   presentation: z.literal("panel"),
   cells: z
     .array(
@@ -524,6 +535,7 @@ const scheduleFields = z.object({
   kind: z.literal("scheduled_exact_points"),
   continuous: z.literal(false),
   observations: z.literal("discrete-points"),
+  samplingGaps,
   schedule: z.object({
     kind: z.literal("fixed-cadence"),
     startMs: ms,

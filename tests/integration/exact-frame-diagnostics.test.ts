@@ -116,6 +116,7 @@ test("exact-frame MCP diagnostics are correlated, cache-aware, failure-visible, 
     "frames",
     "investigationRef",
     "kind",
+    "samplingGaps",
     "stateResource",
   ]);
   assert.equal(first.frames.length, 2);

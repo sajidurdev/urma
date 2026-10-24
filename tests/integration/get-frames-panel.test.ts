@@ -17,6 +17,7 @@ import { runChecked } from "../../src/subprocess/runner.js";
 type IndividualOutput = Readonly<{
   kind: "exact_points";
   continuousMotion: false;
+  samplingGaps: unknown;
   frames: readonly Readonly<{
     index: number;
     atMs: number;
@@ -28,6 +29,7 @@ type IndividualOutput = Readonly<{
 type PanelOutput = Readonly<{
   kind: "exact_points";
   continuousMotion: false;
+  samplingGaps: unknown;
   presentation: "panel";
   cells: readonly Readonly<{
     index: number;
@@ -232,8 +234,19 @@ test("get_frames panel is bounded, ordered, canonical-resource mapped, and cache
     "frames",
     "investigationRef",
     "kind",
+    "samplingGaps",
     "stateResource",
   ]);
+  assert.deepEqual(omitted.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 0, endMs: 5_000 },
+    timestampBasis: "requested",
+    largestGaps: [
+      { startMs: 1_500, endMs: 5_000, durationSeconds: 3.5 },
+      { startMs: 500, endMs: 1_500, durationSeconds: 1 },
+      { startMs: 0, endMs: 500, durationSeconds: 0.5 },
+    ],
+  });
   assert.equal(omitted.frames.length, 2);
   const omittedResult = await client.callTool({
     name: "get_frames",
@@ -280,6 +293,17 @@ test("get_frames panel is bounded, ordered, canonical-resource mapped, and cache
   });
   const panel = structured<PanelOutput>(panelResult, "panel");
   assert.equal(panel.presentation, "panel");
+  assert.deepEqual(panel.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 0, endMs: 5_000 },
+    timestampBasis: "requested",
+    largestGaps: [
+      { startMs: 2_500, endMs: 5_000, durationSeconds: 2.5 },
+      { startMs: 500, endMs: 1_500, durationSeconds: 1 },
+      { startMs: 1_500, endMs: 2_500, durationSeconds: 1 },
+      { startMs: 0, endMs: 500, durationSeconds: 0.5 },
+    ],
+  });
   assert.deepEqual(
     panel.cells.map((cell) => cell.index),
     [1, 2, 3],

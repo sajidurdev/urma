@@ -163,11 +163,11 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
     ],
     get_overview: [
       "5e8fa0f2b3ce40050c20aeb04b8afde7357d17e2200806f83798f647c4d1be11",
-      "e87783ac6b7ec2a89bc4be4cf0a863e18156d6001aa92b030e0430980c4ed99c",
+      "d5ea0e65759cf6f5ab657dafaf12696c45c47e50f466e94dea28c9c7cb803954",
     ],
     get_frames: [
       "f4daa02d0874a4050a4cc4dc54d94642da1492e17d902a24e4b490c4a3093e1d",
-      "c5753a4496f113f6eb648c7e621115f79219f22246e39ca5e39cea37201c8ed9",
+      "b968e5dc63cc92c2e51a225430c43a05f5e840b1719839b7f5341feaf70c347c",
     ],
   } as const;
   for (const tool of tools.tools) {
@@ -572,6 +572,22 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
   assert.equal(scopedContent.timebase, "source-global");
   assert.equal(scopedContent.observedCoverage.kind, "sample-points-only");
   assert.equal(scopedContent.observedCoverage.continuous, false);
+  const scopedGaps = (scopedOverview.structuredContent as {
+    samplingGaps: {
+      scope: string;
+      interval: { startMs: number; endMs: number };
+      timestampBasis: string;
+      largestGaps: unknown[];
+    };
+  }).samplingGaps;
+  assert(scopedGaps, "MCP must expose scoped sampling gaps");
+  assert.equal(scopedGaps.scope, "response");
+  assert.equal(scopedGaps.timestampBasis, "nominal");
+  assert.deepEqual(scopedGaps.interval, scopedContent.requestedInterval);
+  assert.equal(scopedGaps.largestGaps.length, 5);
+  assert.deepEqual(scopedGaps.largestGaps[0], {
+    startMs: 2_500, endMs: 3_000, durationSeconds: 0.5,
+  });
   assert.deepEqual(
     scopedContent.observedCoverage.sampleTimestampsMs,
     scopedContent.cells.map((cell) => cell.timestampMs),
@@ -597,6 +613,16 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
   });
   const frameStructured = frames.structuredContent as Record<string, unknown>;
   assert.equal(frameStructured.stateSummary, undefined);
+  assert.deepEqual(frameStructured.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 500, endMs: 3_000 },
+    timestampBasis: "requested",
+    largestGaps: [
+      { startMs: 500, endMs: 1_500, durationSeconds: 1 },
+      { startMs: 1_500, endMs: 2_500, durationSeconds: 1 },
+      { startMs: 2_500, endMs: 3_000, durationSeconds: 0.5 },
+    ],
+  });
   assert.equal(
     (frameStructured.frames as Array<Record<string, unknown>>)[0]?.mimeType,
     undefined,

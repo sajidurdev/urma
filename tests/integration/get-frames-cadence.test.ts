@@ -32,6 +32,7 @@ type ScheduledSlot = Readonly<{
 
 type ScheduledOutput = Readonly<{
   kind: "scheduled_exact_points";
+  samplingGaps: unknown;
   continuous: false;
   observations: "discrete-points";
   schedule: Readonly<{
@@ -260,6 +261,17 @@ test("fixed cadence preserves canonical exact frames, panel mapping, and honest 
   });
   const panel = structured<ScheduledOutput>(panelResult, "cadence panel");
   assert.equal(panel.presentation, "panel");
+  assert.deepEqual(panel.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 500, endMs: 3_500 },
+    timestampBasis: "requested",
+    largestGaps: [
+      { startMs: 500, endMs: 1_500, durationSeconds: 1 },
+      { startMs: 1_500, endMs: 2_500, durationSeconds: 1 },
+      { startMs: 2_500, endMs: 3_500, durationSeconds: 1 },
+    ],
+  });
+  assert.deepEqual(scheduled.samplingGaps, panel.samplingGaps);
   assert(panel.panel);
   assert.equal(panel.panel.cellCount, 3);
   assert.deepEqual(
@@ -315,6 +327,15 @@ test("fixed cadence preserves canonical exact frames, panel mapping, and honest 
   );
   assert.equal(changedContinuationPage.page.startIndex, 2);
   assert.equal(changedContinuationPage.page.endIndexExclusive, 3);
+  assert.deepEqual(changedContinuationPage.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 500, endMs: 4_500 },
+    timestampBasis: "requested",
+    largestGaps: [
+      { startMs: 500, endMs: 2_500, durationSeconds: 2 },
+      { startMs: 2_500, endMs: 4_500, durationSeconds: 2 },
+    ],
+  });
   assert.deepEqual(
     changedContinuationPage.slots.map((slot) => slot.requestedAtMs),
     [2_500],
