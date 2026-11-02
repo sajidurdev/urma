@@ -653,9 +653,9 @@ export class EvidenceService {
     this.framePanels = new FramePanelAcquirer(config, store, blobs);
   }
 
-  /** Rebind shared frame artifacts to this investigation's source occurrence */
+  /** Record shared frame artifacts under this investigation's source. */
   #admitFrameArtifacts(
-    source: Pick<ResolvedSource, "sourceRef" | "revision">,
+    source: Pick<ResolvedSource, "sourceRef" | "revision" | "kind">,
     frames: readonly ExactFrameResult[],
   ): ExactFrameResult[] {
     return frames.map((frame) => {
@@ -676,7 +676,7 @@ export class EvidenceService {
   }
 
   #admitFrameOutcomes(
-    source: Pick<ResolvedSource, "sourceRef" | "revision">,
+    source: Pick<ResolvedSource, "sourceRef" | "revision" | "kind">,
     outcomes: readonly FrameTargetOutcome[],
   ): FrameTargetOutcome[] {
     return outcomes.map((outcome) => {

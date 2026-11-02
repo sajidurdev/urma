@@ -20,6 +20,7 @@ import { MediaAcquirer } from "./media.js";
 import type { RemoteOperationContext } from "../remote/operation-context.js";
 import type { SectionAcquisitionOutcome } from "./media.js";
 import {
+  isInputRelativeTimestampCovered,
   isTimestampCovered,
   parseStoredBoundedVideoCoverage,
   parseStoredVideoCoverage,
@@ -86,15 +87,19 @@ function targetedDerivativeUnavailable(
   return new UrmaError("TARGETED_MEDIA_UNAVAILABLE", message, { detail });
 }
 
+function frameExtractorVersion(source: Pick<ResolvedSource, "kind">): string {
+  return source.kind === "local" ? "local-frame-extractor-v3" : "frame-extractor-v2";
+}
+
 export function exactFrameRequestKey(
-  source: Pick<ResolvedSource, "sourceRef" | "revision">,
+  source: Pick<ResolvedSource, "sourceRef" | "revision" | "kind">,
   atMs: number,
 ): string {
   return deterministicRequestKey(
     source.revision,
     "frame",
     { sourceRef: source.sourceRef, atMs, format: "jpeg" },
-    "frame-extractor-v2",
+    frameExtractorVersion(source),
   );
 }
 
@@ -445,7 +450,7 @@ export class FrameAcquirer {
         // The verified local snapshot contains the full input, so its first frame
         // is a valid answer when a target predates the first video PTS.
         for (const time of missing) {
-          if (!isTimestampCovered(coverage, time, true)) {
+          if (!isInputRelativeTimestampCovered(coverage, time)) {
             const error = targetedDerivativeUnavailable(
               `Local source timing coverage does not include target ${time} ms`,
               { reason: "local-coverage-miss", targetMs: time },
@@ -454,25 +459,9 @@ export class FrameAcquirer {
             markTargetError(time, error);
             continue;
           }
-          let seekMs: number;
-          try {
-            seekMs = physicalSeekMs(coverage, time, true);
-          } catch (cause) {
-            const error = new UrmaError(
-              "MEDIA_INVALID",
-              "Local source container timing cannot map the exact target to an input seek position",
-              {
-                detail: { reason: "local-seek-origin-mismatch" },
-                cause,
-              },
-            );
-            if (!allowTargetErrors) throw error;
-            markTargetError(time, error);
-            continue;
-          }
           const media: FrameMedia = {
             path: pinnedPath,
-            seekMs,
+            seekMs: time,
             parent: null,
             coverage,
             transportCacheHit: false,
@@ -729,7 +718,7 @@ export class FrameAcquirer {
           endMs: atMs,
           params: { atMs, format: "jpeg" },
           producer: {
-            version: "frame-extractor-v2",
+            version: frameExtractorVersion(source),
             urmaVersion: URMA_VERSION,
             ...versions,
             transportArtifactId: media.parent?.artifactId ?? null,

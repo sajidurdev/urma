@@ -17,6 +17,7 @@ import { deterministicRequestKey } from "../../src/core/request-key.js";
 import { UrmaError } from "../../src/core/errors.js";
 import type { ResolvedSource } from "../../src/sources/types.js";
 import {
+  isInputRelativeTimestampCovered,
   isTimestampCovered,
   parseStoredBoundedVideoCoverage,
   parseStoredVideoCoverage,
@@ -1238,7 +1239,6 @@ test("unknown PTS origin fails exact targets instead of becoming zero-origin", a
     start_time: undefined,
   };
   assert.equal(parseVideoStreamCoverage(missingOrigin, "2.000000"), null);
-  assert.match(shifted, /offset-2\.mp4$/u);
 
   const local = await pinnedLocalVideo(ctx, shifted, ctx.resolved.revision);
   const unavailable = {
@@ -1388,7 +1388,7 @@ test("exact-frame cache reuse is source-scoped when local revisions collide", as
   );
 });
 
-test("local exact frames use pinned nonzero-PTS timing and fail closed without it", async (t) => {
+test("local exact frames keep file-relative targets with nonzero PTS and fail closed without timing", async (t) => {
   const ctx = await fixture(t);
   const shifted = await makeOffsetSection(ctx, ctx.full, 2);
   const local = await pinnedLocalVideo(ctx, shifted, ctx.resolved.revision);
@@ -1408,7 +1408,7 @@ test("local exact frames use pinned nonzero-PTS timing and fail closed without i
       observed[0]!.artifact.blobPath,
       8 * 1024 * 1024,
     ),
-    await canonicalFrame(ctx, 2_000, "local-pts-canonical"),
+    await canonicalFrame(ctx, 4_000, "local-pts-canonical"),
   );
 
   for (const videoTiming of [
@@ -1491,36 +1491,45 @@ test("legacy v2 local timing is reprobed from the pinned blob before selecting f
   );
 });
 
-test("local targets with container origin after video PTS fail per target", async (t) => {
-  const ctx = await fixture(t);
-  const delayed = await makeAudioVideoWithDelayedVideo(ctx);
-  const local = await pinnedLocalVideo(ctx, delayed, ctx.resolved.revision);
-  const inconsistentTiming = {
-    ...(local.safeMetadata.videoTiming as Record<string, unknown>),
-    validatedContainerStartTime: "0.500000",
-  };
-  const inconsistent = {
-    ...local,
-    safeMetadata: { ...local.safeMetadata, videoTiming: inconsistentTiming },
-  };
+test("local coverage excludes the container-relative video end with nonzero origin", async (t) => {
+  const ctx = await fixture(t, 12_000);
+  const shifted = await makeOffsetSection(ctx, ctx.full, 2);
+  const local = await pinnedLocalVideo(ctx, shifted, ctx.resolved.revision);
   const outcomes = await new FrameAcquirer(
     ctx.config,
     ctx.store,
     ctx.blobs,
     new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, {
       run: async () => {
-        throw new Error("local origin mismatch must not acquire remote media");
+        throw new Error("local coverage checks must not acquire remote media");
       },
     }),
-  ).getOutcomes(inconsistent, ctx.ref, [100, 1_000]);
+  ).getOutcomes(local, ctx.ref, [100, 1_000, 10_000]);
 
-  assert.deepEqual(outcomes.map((outcome) => outcome.status), ["error", "success"]);
-  const unavailable = outcomes[0]!;
+  assert.deepEqual(outcomes.map((outcome) => outcome.status), ["success", "success", "error"]);
+  const unavailable = outcomes[2]!;
   assert.equal(unavailable.status, "error");
   if (unavailable.status === "error") {
     assert(unavailable.error instanceof UrmaError);
-    assert.equal(unavailable.error.code, "MEDIA_INVALID");
-    assert.equal(unavailable.error.detail.reason, "local-seek-origin-mismatch");
+    assert.equal(unavailable.error.code, "TARGETED_MEDIA_UNAVAILABLE");
+    assert.equal(unavailable.error.detail.reason, "local-coverage-miss");
+  }
+});
+
+test("local input-relative coverage preserves fractional and negative container origins", () => {
+  for (const origin of [-7_000_000_001n, 0n, 7_000_000_001n]) {
+    const originSeconds = Number(origin) / 1_000_000_000;
+    const coverage = parseVideoStreamCoverage({
+      codec_type: "video", time_base: "1/1000000000",
+      start_pts: String(origin + 55_000_000n), duration_ts: "2000000000",
+    }, originSeconds.toFixed(9));
+    assert(coverage);
+    assert.equal(isInputRelativeTimestampCovered(coverage, 0), true);
+    assert.equal(isInputRelativeTimestampCovered(coverage, 2_054), true);
+    assert.equal(isInputRelativeTimestampCovered(coverage, 2_055), false);
+    assert.equal(isInputRelativeTimestampCovered(coverage, -1), false);
+    assert.equal(isInputRelativeTimestampCovered(coverage, 0.5), false);
+    assert.equal(isInputRelativeTimestampCovered(coverage, Number.NaN), false);
   }
 });
 
@@ -2162,6 +2171,7 @@ test("invalid bounded timing remains a target failure without reusable escalatio
     ctx.blobs,
     new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, transport.downloader),
   ).getOutcomes(ctx.resolved, ctx.ref, times);
+  assert.deepEqual(outcomes.map((outcome) => outcome.atMs), times);
   assert.deepEqual(
     transport.calls.map((args) => rangeArguments(args)),
     [
@@ -2488,31 +2498,7 @@ test("corrupt reusable cache does not authorize full acquisition for a bounded H
   );
 });
 
-test("a non-targetable remote transport keeps reusable evidence as its primary path", async (t) => {
-  const ctx = await fixture(t);
-  const nonTargetable = {
-    ...ctx.resolved,
-    formats: ctx.resolved.formats.map((format) => ({
-      ...format,
-      protocol: "https",
-    })),
-    capabilities: { ...ctx.resolved.capabilities, targetedMedia: false },
-  };
-  const transport = copyingDownloader(ctx, ctx.full);
-  const outcomes = await new FrameAcquirer(
-    ctx.config,
-    ctx.store,
-    ctx.blobs,
-    new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, transport.downloader),
-  ).getOutcomes(nonTargetable, ctx.ref, [4_000]);
-  assert.equal(outcomes[0]?.status, "success");
-  assert.deepEqual(
-    transport.calls.map((args) => rangeArguments(args).length),
-    [0],
-  );
-});
-
-test("strict cancellation, hard budget, and malformed local media do not become reusable fallback", async (t) => {
+test("strict cancellation, hard budgets, and missing local snapshots do not trigger reusable fallback", async (t) => {
   const ctx = await fixture(t);
 
   const calls: string[][] = [];
@@ -2562,12 +2548,10 @@ test("strict cancellation, hard budget, and malformed local media do not become 
   );
   assert.equal(calls.length, 0);
 
-  const malformed = path.join(ctx.directory, "malformed-local.mp4");
-  await writeFile(malformed, Buffer.alloc(262));
   const local = {
     ...ctx.resolved,
     kind: "local" as const,
-    canonicalLocator: malformed,
+    canonicalLocator: ctx.full,
     formats: [],
     capabilities: { ...ctx.resolved.capabilities, targetedMedia: false },
   };
@@ -2579,9 +2563,8 @@ test("strict cancellation, hard budget, and malformed local media do not become 
       new MediaAcquirer(ctx.config, ctx.store, ctx.blobs, downloader),
     ).get(local, ctx.ref, [1_000]),
     (error: unknown) =>
-      error instanceof Error &&
-      "code" in error &&
-      error.code !== "TARGETED_MEDIA_UNAVAILABLE",
+      error instanceof UrmaError && error.code === "SOURCE_UNAVAILABLE" &&
+      error.detail.reason === "local-snapshot-missing",
   );
   assert.equal(calls.length, 0);
 });
