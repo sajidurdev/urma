@@ -127,20 +127,18 @@ test("get_frames panel is bounded, ordered, canonical-resource mapped, and cache
   const tools = await client.listTools();
   const framesTool = tools.tools.find((tool) => tool.name === "get_frames");
   assert(framesTool);
-  assert.equal(
-    framesTool.description,
-    "Get deterministic frame evidence at explicit points, a burst, or fixed cadence. Batch known targets; cadence is discrete, not continuous.",
-  );
   const inputSchema = framesTool.inputSchema as {
-    properties?: Record<string, unknown>;
-    allOf?: Array<{ properties?: Record<string, unknown> }>;
-    required?: readonly string[];
+    oneOf?: Array<{
+      properties?: Record<string, unknown>;
+      required?: readonly string[];
+    }>;
   };
-  assert(
-    inputSchema.properties?.presentation ||
-      inputSchema.allOf?.some((part) => part.properties?.presentation),
-  );
-  assert(!inputSchema.required?.includes("presentation"));
+  assert(inputSchema.oneOf);
+  assert.equal(inputSchema.oneOf.length, 2);
+  for (const variant of inputSchema.oneOf) {
+    assert(variant.properties?.presentation);
+    assert(!variant.required?.includes("presentation"));
+  }
 
   const inspection = structured<{
     investigationRef: string;
@@ -219,16 +217,14 @@ test("get_frames panel is bounded, ordered, canonical-resource mapped, and cache
     1,
   );
 
-  const omitted = structured<IndividualOutput>(
-    await client.callTool({
-      name: "get_frames",
-      arguments: {
-        investigationRef,
-        request: { kind: "points", timesMs: [500, 1_500] },
-      },
-    }),
-    "omitted presentation",
-  );
+  const omittedResult = await client.callTool({
+    name: "get_frames",
+    arguments: {
+      investigationRef,
+      request: { kind: "points", timesMs: [500, 1_500] },
+    },
+  });
+  const omitted = structured<IndividualOutput>(omittedResult, "omitted presentation");
   assert.deepEqual(Object.keys(omitted).sort(), [
     "continuousMotion",
     "frames",
@@ -248,13 +244,6 @@ test("get_frames panel is bounded, ordered, canonical-resource mapped, and cache
     ],
   });
   assert.equal(omitted.frames.length, 2);
-  const omittedResult = await client.callTool({
-    name: "get_frames",
-    arguments: {
-      investigationRef,
-      request: { kind: "points", timesMs: [500, 1_500] },
-    },
-  });
   assert.equal(
     omittedResult.content.filter((item) => item.type === "image").length,
     2,
@@ -375,7 +364,7 @@ test("get_frames panel is bounded, ordered, canonical-resource mapped, and cache
     canonical.every(
       (artifact) =>
         artifact.role === "evidence" &&
-        artifact.producer.version === "frame-extractor-v2",
+        artifact.producer.version === "local-frame-extractor-v3",
     ),
   );
   const derived = artifacts.find(

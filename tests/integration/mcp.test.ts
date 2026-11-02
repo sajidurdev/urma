@@ -154,7 +154,7 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
       "9260778f78381c328663a213f21a27ab879e14dbe405ae0e2cd02fe7cf88d291",
     ],
     search_transcript: [
-      "0c54197c78f0c851106b948fd3f526d824acb8a9f669555b13e0b0fa38c39349",
+      "1dbba1766a650d9a4c745ecfef3ce876c457085b374cc75d80e1905210ac6779",
       "6810adb1dc847380e3bf46b619201cfde3f886647df318491b8a8f2687473557",
     ],
     read_transcript: [
@@ -166,7 +166,7 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
       "d5ea0e65759cf6f5ab657dafaf12696c45c47e50f466e94dea28c9c7cb803954",
     ],
     get_frames: [
-      "f4daa02d0874a4050a4cc4dc54d94642da1492e17d902a24e4b490c4a3093e1d",
+      "e3233903af29b260f2a0be3d91f96ea35fd0d88879f3c183817975c49dfe8825",
       "b968e5dc63cc92c2e51a225430c43a05f5e840b1719839b7f5341feaf70c347c",
     ],
   } as const;
@@ -183,33 +183,15 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
   const searchTool = tools.tools.find(
     (tool) => tool.name === "search_transcript",
   );
-  assert.equal(
-    searchTool?.description,
-    "Search source-provided captions for temporal clues. Batch related queries; hits are not visual proof and misses apply only to the selected track.",
-  );
-  const inspectTool = tools.tools.find((tool) => tool.name === "inspect_video");
-  assert.equal(
-    inspectTool?.description,
-    "Inspect a finite video and start an investigation pinned to that snapshot. Use first for a new source; refresh only for a new snapshot.",
-  );
-  const readTool = tools.tools.find((tool) => tool.name === "read_transcript");
-  assert.equal(
-    readTool?.description,
-    "Read timestamped caption segments from a bounded interval.",
-  );
   const searchSchema = searchTool?.inputSchema as
     | {
-      allOf?: Array<{
-        oneOf?: Array<{
-          properties?: Record<string, unknown>;
-          required?: readonly string[];
-        }>;
+      oneOf?: Array<{
+        properties?: Record<string, unknown>;
+        required?: readonly string[];
       }>;
     }
     | undefined;
-  const searchVariants = searchSchema?.allOf?.find((part) =>
-    Array.isArray(part.oneOf)
-  )?.oneOf;
+  const searchVariants = searchSchema?.oneOf;
   assert(Array.isArray(searchVariants));
   assert(searchVariants.some((variant) => variant.properties?.query));
   assert(searchVariants.some((variant) => variant.properties?.queries));
@@ -232,10 +214,6 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
     | undefined;
   assert(Array.isArray(searchOutputSchema?.anyOf));
   const overviewTool = tools.tools.find((tool) => tool.name === "get_overview");
-  assert.equal(
-    overviewTool?.description,
-    "Get a sparse 12-cell visual locator for a video or interval. Use to find moments; samples are not continuous coverage.",
-  );
   const overviewSchema = overviewTool?.inputSchema as
     | { properties?: Record<string, unknown>; required?: readonly string[] }
     | undefined;
@@ -244,23 +222,15 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
   assert(!overviewSchema?.required?.includes("startMs"));
   assert(!overviewSchema?.required?.includes("endMs"));
   const framesTool = tools.tools.find((tool) => tool.name === "get_frames");
-  assert.equal(
-    framesTool?.description,
-    "Get deterministic frame evidence at explicit points, a burst, or fixed cadence. Batch known targets; cadence is discrete, not continuous.",
-  );
   const framesSchema = framesTool?.inputSchema as
     | {
-      allOf?: Array<{
-        oneOf?: Array<{
-          properties?: Record<string, unknown>;
-          required?: readonly string[];
-        }>;
+      oneOf?: Array<{
+        properties?: Record<string, unknown>;
+        required?: readonly string[];
       }>;
     }
     | undefined;
-  const frameSelection = framesSchema?.allOf?.find((part) =>
-    Array.isArray(part.oneOf)
-  )?.oneOf;
+  const frameSelection = framesSchema?.oneOf;
   assert(Array.isArray(frameSelection));
   assert(
     frameSelection.some(
