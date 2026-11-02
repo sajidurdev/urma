@@ -12,6 +12,20 @@ test("provider metadata read timeouts retain upstream attribution across evidenc
   }
 });
 
+test("provider metadata timeouts retain upstream attribution after yt-dlp warnings", () => {
+  const timeout = "ERROR: [Imgur] Ka5Buza: Unable to download JSON metadata: HTTPSConnectionPool(host='api.imgur.com', port=443): Read timed out. (read timeout=10.0) (caused by TransportError(\"HTTPSConnectionPool(host='api.imgur.com', port=443): Read timed out. (read timeout=10.0)\"))";
+  const warning = "Deprecated Feature: Support for Python version 3.10 has been deprecated. Please update to Python 3.11 or above";
+  for (const preamble of [warning + "\n", warning + "\r\nWARNING: A dependency is deprecated\r\n"]) {
+    const failure = classifyFailure("inspect", {
+      code: "SOURCE_UNAVAILABLE",
+      retryable: true,
+      detail: `[local-path-redacted] failed with exit code 1: ${preamble}${timeout}`,
+    });
+    assert.equal(failure, "PROVIDER_NETWORK_TIMEOUT");
+    assert.equal(responsibility(failure), "upstream");
+  }
+});
+
 test("operation limits and proxy failures cannot be exempted as provider timeouts", () => {
   const cases = [
     { code: "MEDIA_ACQUISITION_TIMEOUT", detail: "yt-dlp exceeded its 180000 ms timeout and its process tree was terminated" },
@@ -19,6 +33,8 @@ test("operation limits and proxy failures cannot be exempted as provider timeout
     { code: "SOURCE_UNAVAILABLE", detail: "Safe Proxy upstream connection timed out" },
     { code: "SOURCE_UNAVAILABLE", detail: "Bounded section [0,2001) does not cover target 0 ms" },
     { code: "SOURCE_UNAVAILABLE", detail: "Unable to download JSON metadata: Read timed out" },
+    { code: "SOURCE_UNAVAILABLE", detail: providerTimeout.replace("ERROR:", "Unexpected subprocess failure\nERROR:") },
+    { code: "SOURCE_UNAVAILABLE", detail: providerTimeout.replace("ERROR:", "ERROR: Local acquisition failed\nERROR:") },
     { code: "SOURCE_UNAVAILABLE", detail: providerTimeout.replaceAll("graphql.api.dailymotion.com", "127.0.0.1") },
     { code: "SOURCE_UNAVAILABLE", detail: providerTimeout.replaceAll("graphql.api.dailymotion.com", "proxy.localhost") },
     { code: "INTERNAL_ERROR", detail: providerTimeout },
