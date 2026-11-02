@@ -730,7 +730,7 @@ export function buildMcpServer(
     {
       title: "Urma investigation state",
       description:
-        "Complete persisted acquisition, cache, and presentation state for one evidence investigation.",
+        "Summary of returned evidence, cache availability, network usage, and sampling gaps for this investigation. Samples do not establish continuous coverage.",
       mimeType: "application/json",
     },
     async (uri, variables) => {

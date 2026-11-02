@@ -101,7 +101,7 @@ function isGenericCloudflareChallenge(error: unknown): boolean {
     );
 }
 
-/** Flags verified against pinned yt-dlp 2026.08.19 */
+/** Security flags for the pinned yt-dlp; setup checks their availability. */
 export function hermeticYtDlpArgs(
   args: readonly string[],
   nodeExecutable: string = process.execPath,
@@ -414,7 +414,7 @@ export class YtDlp {
     };
   }
 
-  /** Bind one ephemeral delivery lease to an immutable snapshot */
+  /** Create a temporary delivery lease after checking the saved source and format. */
   async lease(
     source: Pick<ResolvedSource, "sourceRef" | "revision" | "canonicalLocator" | "identity">,
     format: FormatSummary,

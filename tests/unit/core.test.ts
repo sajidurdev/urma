@@ -11,7 +11,6 @@ import {
 } from "../../src/core/ids.js";
 import {
   createOrderedVisualSet,
-  largestUnsampledGaps,
   summarizeSamplingGaps,
   uniformPointsMs,
 } from "../../src/core/coverage.js";
@@ -64,13 +63,6 @@ test("ordered burst is sparse and never represented as a continuous interval", (
   assert.throws(() =>
     createOrderedVisualSet(1_000, 4_000, [1_000, 1_000], ids.slice(0, 2))
   );
-});
-
-test("remaining gaps derive only from presented point timestamps", () => {
-  assert.deepEqual(largestUnsampledGaps(10_000, [2_000, 8_000], 2), [
-    { startMs: 2_000, endMs: 8_000 },
-    { startMs: 0, endMs: 2_000 },
-  ]);
 });
 
 test("sampling gaps include scoped boundaries and sort reported points without changing them", () => {

@@ -20,8 +20,6 @@ import { SqliteStore } from "../src/store/sqlite-store.js";
 import { cadenceAssertionFailures } from "./cadence.js";
 import { classifyFailure, isFixtureFailure, responsibility, type ErrorInfo, type FailureClass } from "./failures.js";
 
-/** Run compatibility checks through the MCP client interface */
-
 type AnyRecord = Record<string, unknown>;
 type Status = "PASS" | "FAIL" | "BLOCKED" | "UNTESTED" | "NOT_RUN";
 type Classification =
@@ -725,7 +723,7 @@ async function connect(
     stderr += chunk.toString("utf8");
   });
   const client = new Client({
-    name: "urma-provider-compatibility-gauntlet",
+    name: "urma-provider-compatibility",
     version: "1.0.0",
   });
   await client.connect(transport);
@@ -1604,17 +1602,8 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
     const fixture = fixtureOf(result);
     return fixture.url !== null && Array.isArray(result.fixtureAttempts) && result.fixtureAttempts.length > 0;
   });
-  const firstClass = results.filter((result) => result.classification === "FIRST_CLASS_CANDIDATE");
-  const bestEffort = results.filter((result) => result.classification === "BEST_EFFORT_PASS");
-  const partial = results.filter((result) => result.classification === "PARTIAL_PASS");
-  const blocked = results.filter((result) => result.classification === "BLOCKED");
+  const failed = results.filter((result) => result.classification === "PARTIAL_PASS" || result.classification === "BLOCKED");
   const untested = results.filter((result) => result.classification === "UNTESTED");
-  const majorNames = [
-    "TikTok", "Instagram Reel", "Facebook Video", "Facebook Reel", "X / Twitter", "Reddit",
-    "Twitch VOD", "Twitch Clip", "Loom", "Vimeo",
-  ];
-  const majorResults = results.filter((result) => majorNames.includes(String(result.provider)));
-  const majorCount = (classification: Classification) => majorResults.filter((result) => result.classification === classification).length;
   const lines: string[] = [];
   const firstFailure = (result: AnyRecord): AnyRecord | null =>
     record(result.firstBlockingFailure)
@@ -1640,23 +1629,14 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
   const operationText = (result: AnyRecord, key: string): string => String(operationMs(result, key) ?? "—");
 
   lines.push("# Urma provider compatibility report", "", `Generated: ${generatedAt}`, "");
-  lines.push("## 1. Executive result", "");
-  lines.push(`- Major platforms targeted: ${majorNames.join(", ")}.`);
-  lines.push(`- Providers actually exercised: ${exercised.length > 0 ? exercised.map((result) => String(result.provider)).join(", ") : "none"}.`);
-  lines.push(`- Major-platform classifications — FIRST_CLASS_CANDIDATE: ${majorCount("FIRST_CLASS_CANDIDATE")}; BEST_EFFORT_PASS: ${majorCount("BEST_EFFORT_PASS")}; PARTIAL_PASS: ${majorCount("PARTIAL_PASS")}; BLOCKED: ${majorCount("BLOCKED")}; UNTESTED: ${majorCount("UNTESTED")}.`);
-  lines.push(`- All selected fixture rows — FIRST_CLASS_CANDIDATE: ${count("FIRST_CLASS_CANDIDATE")}; BEST_EFFORT_PASS: ${count("BEST_EFFORT_PASS")}; PARTIAL_PASS: ${count("PARTIAL_PASS")}; BLOCKED: ${count("BLOCKED")}; UNTESTED: ${count("UNTESTED")}.`);
-  lines.push("- Resolve/admission and inspect are recorded from the public production `inspect_video` call because Urma exposes no separate public resolver tool; no resolver or acquisition bypass was added.");
-  lines.push("- `expectedExtractor` is checked case-insensitively against the extractor or extractor key reported by `inspect_video`; omission means extractor identity is not asserted for that fixture.");
-  lines.push("- Results are fixture-local observations on the test date, not provider-wide availability guarantees.");
-  const findings = results
-    .filter((result) => result.classification !== "FIRST_CLASS_CANDIDATE")
-    .slice(0, 15)
-    .map((result) => `${String(result.provider)}: ${String(result.classification)}${compactError(result) === "—" ? "" : ` (${compactError(result)})`}`);
-  if (findings.length === 0) lines.push("- All exercised fixtures met the configured qualification gates.");
-  for (const finding of findings) lines.push(`- ${finding}`);
+  lines.push("## Summary", "");
+  lines.push(`- Providers exercised: ${exercised.length > 0 ? exercised.map((result) => String(result.provider)).join(", ") : "none"}.`);
+  lines.push(`- Fixture classifications — FIRST_CLASS_CANDIDATE: ${count("FIRST_CLASS_CANDIDATE")}; BEST_EFFORT_PASS: ${count("BEST_EFFORT_PASS")}; PARTIAL_PASS: ${count("PARTIAL_PASS")}; BLOCKED: ${count("BLOCKED")}; UNTESTED: ${count("UNTESTED")}.`);
+  lines.push("", "Results apply to the listed fixtures and run date. They do not establish provider-wide availability. Missing captions apply only to the tested fixture.");
+  lines.push("Resolve and inspect use the same `inspect_video` call. Expected extractor names are compared case-insensitively; omitted names are not checked.");
 
-  lines.push("", "## 2. Major-platform compatibility matrix", "", "| Provider | Tier | Expected extractor | Actual extractor | Resolve | Timeline | Frames | Cadence | Overview | Captions | Transcript | Cache | Restart | Refresh | Provenance | Transport | Classification | Fixture outcome |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
-  for (const result of majorResults) {
+  lines.push("", "## Results", "", "| Provider | Tier | Expected extractor | Actual extractor | Resolve | Timeline | Frames | Cadence | Overview | Captions | Transcript | Cache | Restart | Refresh | Provenance | Transport | Classification | Fixture outcome |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+  for (const result of results) {
     const frames = record(result.frames)
       ? `${matrixStatus(result.frames, "exact")}/${matrixStatus(result.frames, "multiple")}`
       : "NOT_RUN";
@@ -1665,11 +1645,11 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
     const actualExtractor = stringValue(resolve?.extractor) ?? stringValue(resolve?.extractorKey) ?? "not reported";
     lines.push(`| ${markdownCell(result.provider)} | ${markdownCell(result.tier)} | ${markdownCell(fixture.expectedExtractor ?? "not asserted")} | ${markdownCell(actualExtractor)} | ${matrixStatus(result, "resolve")} | ${matrixStatus(result, "timeline")} | ${frames} | ${matrixStatus(result, "cadence")} | ${matrixStatus(result, "overview")} | ${markdownCell(matrixCaptions(result))} | ${matrixTranscript(result)} | ${matrixStatus(result, "cache")} | ${matrixStatus(result, "restart")} | ${matrixStatus(result, "refresh")} | ${matrixStatus(result, "provenance")} | ${markdownCell(matrixTransport(result))} | ${markdownCell(result.classification)} | ${markdownCell(result.fixtureOutcome ?? "NOT_RUN")} |`);
   }
-  if (majorResults.length === 0) lines.push("| — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | UNTESTED | UNTESTED |");
+  if (results.length === 0) lines.push("| — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | UNTESTED | UNTESTED |");
 
-  lines.push("", "## 3. Fixture quality", "");
-  if (majorResults.length === 0) lines.push("No major-platform fixture was exercised.");
-  for (const result of majorResults) {
+  lines.push("", "## Fixtures", "");
+  if (results.length === 0) lines.push("No fixtures were selected.");
+  for (const result of results) {
     const fixture = fixtureOf(result);
     const attempts = Array.isArray(result.fixtureAttempts) ? result.fixtureAttempts.filter(record) : [];
     const attempted = attempts.length > 0
@@ -1681,96 +1661,44 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
         return `${String(attempt.url)} → ${String(attempt.status)}${detail}`;
       }).join("; ")
       : "none";
-    const primaryAttempt = attempts[0];
-    const primaryError = optionalRecord(primaryAttempt?.error, "compat result.fixtureAttempts[0].error");
-    let primaryAttemptText = "not attempted";
-    if (primaryAttempt !== undefined) {
-      primaryAttemptText = String(primaryAttempt.status);
-      if (primaryError !== undefined) {
-        primaryAttemptText += ` — ${String(primaryError.code)}: ${String(primaryError.detail)}`;
-      }
-    }
     lines.push(`- **${String(result.provider)}**`);
     lines.push(`  - primary fixture URL: ${String(fixture.primaryUrl ?? fixture.url ?? "none")}`);
-    lines.push(`  - tier: ${String(result.tier ?? "unknown")}`);
-    lines.push(`  - expected extractor: ${String(fixture.expectedExtractor ?? "not asserted")}`);
-    lines.push(`  - fixture rationale: ${String(fixture.notes ?? "No fixture note recorded")}`);
-    lines.push(`  - fixture outcome: ${String(result.fixtureOutcome ?? "NOT_RUN")}`);
-    lines.push(`  - primary attempt: ${primaryAttemptText}`);
-    lines.push(`  - alternates attempted: ${attempted}`);
+    if (typeof fixture.notes === "string") lines.push(`  - fixture note: ${fixture.notes}`);
+    lines.push(`  - attempts: ${attempted}`);
   }
 
-  lines.push("", "## 4. First-class candidates", "");
-  if (firstClass.length === 0) lines.push("None met the configured first-class qualification gates in this run.");
-  for (const result of firstClass) lines.push(`- **${String(result.provider)}**: Tier A fixture passed singleton admission, finite timeline, inspect, exact and multiple frames, bounded cadence, overview, cache reuse, safe provenance, restart, and refresh.`);
-
-  lines.push("", "## 5. Best-effort passes", "");
-  if (bestEffort.length === 0) lines.push("None.");
-  for (const result of bestEffort) {
-    const fixture = fixtureOf(result);
-    lines.push(`- **${String(result.provider)}**: complete generic evidence path passed on a Tier ${String(result.tier ?? "unknown")} fixture; first-class qualification remains limited by fixture tier or configured lifecycle evidence.`);
-  }
-
-  lines.push("", "## 6. Partial passes", "");
-  if (partial.length === 0) lines.push("None.");
-  for (const result of partial) lines.push(`- **${String(result.provider)}**: resolve, finite timeline, inspect, exact/multiple frames, cache, and provenance passed, but a required evidence capability failed: ${compactError(result) === "—" ? "not recorded" : compactError(result)}.`);
-
-  lines.push("", "## 7. Blocked providers", "");
-  if (blocked.length === 0) lines.push("None of the exercised fixtures were blocked.");
-  for (const result of blocked) {
+  lines.push("", "## Failures", "");
+  if (failed.length === 0) lines.push("No blocked or partial results were recorded.");
+  for (const result of failed) {
     const failure = firstFailure(result);
     const attempts = Array.isArray(result.fixtureAttempts) ? result.fixtureAttempts.length : 0;
     lines.push(`- **${String(result.provider)}**`);
     lines.push(`  - fixture outcome: ${String(result.fixtureOutcome ?? "NOT_RUN")}`);
     lines.push(`  - failure code: ${String(failure?.class ?? "INTERNAL_BUG")}`);
-    lines.push(`  - actual observed failure: ${String(failure?.observedError ?? "not recorded")}`);
+    lines.push(`  - error: ${String(failure?.observedError ?? "not recorded")}`);
     lines.push(`  - stage: ${String(failure?.stage ?? "unknown")}`);
     lines.push(`  - failure responsibility: ${String(failure?.responsibility ?? "Urma")}`);
     lines.push(`  - alternate fixtures attempted: ${Math.max(0, attempts - 1)}`);
   }
 
-  lines.push("", "## 8. Untested providers", "");
+  lines.push("", "## Untested providers", "");
   if (untested.length === 0) lines.push("None.");
-  for (const result of untested) lines.push(`- **${String(result.provider)}**: ${String(result.untestedReason ?? compactError(result) ?? "No meaningful fixture was exercised")}.`);
+  for (const result of untested) lines.push(`- **${String(result.provider)}**: ${String(result.untestedReason ?? compactError(result))}.`);
 
-  lines.push(
-    "",
-    "## 9. Generic correctness fixes",
-    "",
-    "- classification: `GENERIC_CORRECTNESS_FIX`.",
-    "- file/function: `src/subprocess/redaction.ts` — `redactText`.",
-    "- failure observed: an upstream TikTok 403 diagnostic exposed a scheme-less signed query fragment containing `expire` and `signature`, which the model-facing payload guard correctly rejected but the production redactor had not removed.",
-    "- why generic: subprocess/provider diagnostics can contain signed query fragments regardless of provider; this is a model-facing redaction contract, not provider-specific evidence logic.",
-    "- change: redact standalone signed query fragments in addition to full HTTP(S) URLs.",
-    "- tests added: `tests/unit/source-process.test.ts` covers scheme-less signed query redaction; all existing unit/security and integration gates were rerun.",
-  );
-
-  lines.push("", "## 10. Security result", "", "All successful qualifications used `dist/src/cli/main.js` over MCP stdio, the generic remote resolver, Safe Proxy, hermetic yt-dlp, finite-timeline admission, persisted snapshots, and normal evidence operations. The runner never supplied cookies, login state, Authorization headers, signed delivery URLs, or a proxy bypass. No successful model-facing payload contained credential-bearing data.");
-  const safeProxyIssues = results.filter((result) => Array.isArray(result.failures) && result.failures.some((failure) => record(failure) && failure.class === "SAFE_PROXY_INCOMPATIBLE"));
-  lines.push(`- Safe Proxy/subprocess compatibility issues observed: ${safeProxyIssues.length > 0 ? safeProxyIssues.map((result) => String(result.provider)).join(", ") : "none"}.`);
-
-  lines.push("", "## 11. Transport findings", "");
-  if (majorResults.length === 0) lines.push("No transport was observed.");
-  for (const result of majorResults) {
+  lines.push("", "## Acquisition details", "");
+  if (results.length === 0) lines.push("No transport was observed.");
+  for (const result of results) {
     const transport = optionalRecord(result.transport, "compat result.transport");
     const performance = optionalRecord(
       result.performance,
       "compat result.performance",
     );
-    lines.push(`- **${String(result.provider)}**: ${matrixTransport(result)}; overview path=${String(transport?.overviewPath ?? "unknown")}; partial-download exception=${String(transport?.partialDownloadException ?? false)}; network accounting=${performance?.networkAccountingComplete === true ? "complete" : "incomplete/unknown"}.`);
+    lines.push(`- **${String(result.provider)}**: ${matrixTransport(result)}; overview path=${String(transport?.overviewPath ?? "unknown")}; network accounting=${performance?.networkAccountingComplete === true ? "complete" : "incomplete/unknown"}.`);
   }
-  lines.push("- Split A/V is reported only when safe persisted metadata exposes it; otherwise the selected progressive/container or manifest basis is reported as observed.");
 
-  lines.push("", "## 12. Caption findings", "");
-  if (majorResults.length === 0) lines.push("No caption result was observed.");
-  for (const result of majorResults) lines.push(`- **${String(result.provider)}**: ${matrixCaptions(result)}; transcript=${matrixTranscript(result)}.`);
-  lines.push("- Caption absence is fixture-local and is not video-support failure.");
-  lines.push("- YouTube baseline: the controlled regression observed 6 source-provided caption tracks and successful transcript read/search; this remains a separate regression control from the primary-provider sweep.");
-  lines.push("- No SRT was observed on the selected Facebook Video or Facebook Reel fixtures in this run. An earlier lower-level Facebook SRT observation was not reproduced here and is not generalized to every Facebook fixture.");
-
-  lines.push("", "## 13. Performance observations", "", "Measured wall times and persisted artifact/process diagnostics are fixture-local observations, not a benchmark.", "", "| Provider | Resolve/admission ms | Inspect ms | Exact-frame ms | Multi-frame ms | Cadence page 1 ms | Overview ms | Cache-repeat ms | Artifact/media bytes | Network bytes | yt-dlp | ffprobe | ffmpeg |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+  lines.push("", "## Performance", "", "Measured wall times and persisted artifact/process diagnostics are fixture-local observations, not a benchmark.", "", "| Provider | Resolve/admission ms | Inspect ms | Exact-frame ms | Multi-frame ms | Cadence page 1 ms | Overview ms | Cache-repeat ms | Artifact/media bytes | Network bytes | yt-dlp | ffprobe | ffmpeg |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
   const performanceFlags: string[] = [];
-  for (const result of majorResults) {
+  for (const result of results) {
     const performance = optionalRecord(
       result.performance,
       "compat result.performance",
@@ -1789,82 +1717,10 @@ function reportMarkdown(results: AnyRecord[], generatedAt: string): string {
     if ((operationMs(result, "multipleFrames") ?? 0) > 60_000) performanceFlags.push(`${String(result.provider)} multi-frame >60s`);
     if ((operationMs(result, "cadencePage1") ?? 0) > 60_000) performanceFlags.push(`${String(result.provider)} cadence >60s`);
     if ((artifactBytes ?? 0) > 128 * 1024 * 1024) performanceFlags.push(`${String(result.provider)} acquisition/artifacts >128 MiB`);
-    const overview = requireRecord(result.overview, "compat result.overview");
-    const overviewArtifact = optionalRecord(
-      overview.artifact,
-      "compat result.overview.artifact",
-    );
-    if ((numberValue(overviewArtifact?.byteSize) ?? 0) >= 200 * 1024 * 1024) performanceFlags.push(`${String(result.provider)} overview approaches/exceeds 256 MiB`);
   }
   lines.push(`- Threshold flags: ${performanceFlags.length > 0 ? performanceFlags.join("; ") : "none observed"}.`);
 
-  lines.push("", "## 14. Regression status", "", `- typecheck / unit-security / integration / YouTube regression: ${process.env.URMA_COMPAT_REGRESSION_STATUS ?? "not embedded; see final task report"}.`);
-
-  const aliases: Record<string, string[]> = {
-    TikTok: ["TikTok"],
-    Instagram: ["Instagram Reel"],
-    Facebook: ["Facebook Video", "Facebook Reel"],
-    X: ["X / Twitter"],
-    Reddit: ["Reddit"],
-    Twitch: ["Twitch VOD", "Twitch Clip"],
-    Loom: ["Loom"],
-    Vimeo: ["Vimeo"],
-  };
-  const recommendationFor = (name: string): string => {
-    const selected = results.filter((result) => (aliases[name] ?? []).includes(String(result.provider)));
-    if (selected.length === 0) return "UNTESTED";
-    const values = selected.map((result) => String(result.classification));
-    if (values.every((value) => value === "FIRST_CLASS_CANDIDATE")) return "FIRST_CLASS_CANDIDATE";
-    if (values.every((value) => value === "FIRST_CLASS_CANDIDATE" || value === "BEST_EFFORT_PASS")) return "BEST_EFFORT";
-    if (values.every((value) => value === "UNTESTED")) return "UNTESTED";
-    if (values.every((value) => value === "BLOCKED")) return "BLOCKED";
-    return "PARTIAL";
-  };
-  lines.push("", "## 15. Initial major-platform support recommendation", "", "| Platform | Recommendation | Basis |", "| --- | --- | --- |");
-  for (const name of ["YouTube", "TikTok", "Instagram", "Facebook", "X", "Reddit", "Twitch", "Loom", "Vimeo"]) {
-    const recommendation = recommendationFor(name);
-    const basis = name === "YouTube"
-      ? "Established controlled regression baseline."
-      : (aliases[name] ?? []).map((alias) => {
-        const match = results.find((result) => String(result.provider) === alias);
-        return `${alias}=${String(match?.classification ?? "UNTESTED")}`;
-      }).join("; ") || "No exercised fixture.";
-    lines.push(`| ${name} | ${recommendation} | ${markdownCell(basis)} |`);
-  }
-  const currentTierA = results
-    .filter((result) => result.tier === "A" && result.classification === "FIRST_CLASS_CANDIDATE")
-    .map((result) => String(result.provider));
-  lines.push("", `Product wording: Urma supports public finite non-DRM video URLs through a secured generic best-effort path. Current Tier A first-class candidates observed in this run: ${currentTierA.length > 0 ? currentTierA.join(", ") : "none"}. Tier B providers remain non-first-class and are not compatibility claims. Provider, fixture, regional access, caption, and overview availability can vary; login, cookies, DRM, live streams, and signed delivery URLs are outside this claim.`);
-
-  const overviewPartial = partial.some((result) => matrixStatus(result, "overview") !== "PASS");
-  const boundedAcquisitionGap = results.some((result) => {
-    const failure = firstFailure(result);
-    return failure?.class === "ACQUISITION_FAILED" ||
-      matrixStatus(result, "overview") === "FAIL" ||
-      (operationMs(result, "cadencePage1") ?? 0) > 60_000 ||
-      (operationMs(result, "overview") ?? 0) > 60_000;
-  });
-  const majorUntested = majorResults.some((result) => result.classification === "UNTESTED") || majorResults.length < majorNames.length;
-  const resolverFailure = results.some((result) => {
-    const failure = firstFailure(result);
-    return failure?.class === "RESOLVER_FAILED" || failure?.class === "PROVIDER_EXTRACTION_FAILED";
-  });
-  const progressiveSlow = majorResults.some((result) => matrixTransport(result).startsWith("progressive") && (operationMs(result, "exactFrame") ?? 0) > 30_000);
-  const nextPriority = boundedAcquisitionGap || overviewPartial
-    ? "B. bounded HLS/overview acquisition"
-    : majorUntested
-    ? "A. more provider qualification"
-    : resolverFailure
-    ? "D. resolver compatibility"
-    : progressiveSlow
-    ? "C. progressive bounded acquisition"
-    : "A. more provider qualification";
-  lines.push("", "## 16. Next engineering priority", "", `**${nextPriority}**. Chosen from measured fixture results: overview failures take precedence when they expose a generic acquisition-budget gap; otherwise unresolved provider coverage, resolver failures, or slow progressive acquisition determine the next slice.`);
-
-  const enoughEvidence = process.env.URMA_YOUTUBE_BASELINE === "PASS" || firstClass.length > 0 || bestEffort.length > 0;
-  lines.push("", "## 17. Final verdict", "", enoughEvidence ? "YES, WITH IMPORTANT QUALIFICATIONS" : "NO", "", enoughEvidence
-    ? "The secured generic path is supported by the exercised results and the established YouTube baseline, but the truthful product claim must distinguish continuously tested providers from first-class candidates awaiting that history and preserve the fixture, regional-access, caption, overview, and lifecycle qualifications above."
-    : "This run did not produce enough passing evidence for a broad support claim.");
+  lines.push("", "## Run context", "", `Related checks: ${process.env.URMA_COMPAT_REGRESSION_STATUS ?? "not recorded"}.`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -1940,7 +1796,7 @@ async function loadFixtures(): Promise<Fixture[]> {
 const enabled = process.env.URMA_RUN_COMPAT === "1";
 if (!enabled) {
   process.stderr.write(
-    "Urma compatibility gauntlet skipped: set URMA_RUN_COMPAT=1 to permit live provider tests.\n",
+    "Urma compatibility checks skipped: set URMA_RUN_COMPAT=1 to permit live provider tests.\n",
   );
 } else {
   const fixtures = await loadFixtures();

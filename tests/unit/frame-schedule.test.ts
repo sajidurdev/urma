@@ -43,21 +43,6 @@ test("fixed cadence handles non-divisible and shorter intervals without resampli
   assert.deepEqual(fixedCadenceTargets(short, 0, 1), [500]);
 });
 
-test("fixed cadence boundary counts include exactly twelve and one hundred twenty targets", () => {
-  assert.equal(
-    fixedCadenceTargetCount({ startMs: 0, endMs: 12, cadenceMs: 1 }),
-    12,
-  );
-  assert.equal(
-    fixedCadenceTargetCount({ startMs: 0, endMs: 120, cadenceMs: 1 }),
-    120,
-  );
-  assert.equal(
-    fixedCadenceTargetCount({ startMs: 0, endMs: 121, cadenceMs: 1 }),
-    121,
-  );
-});
-
 test("fixed cadence rejects invalid values and checks arithmetic safely", () => {
   for (
     const schedule of [

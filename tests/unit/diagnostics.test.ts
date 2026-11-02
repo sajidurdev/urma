@@ -176,6 +176,12 @@ test("disabled exact-frame diagnostics pass null and emit no trace", async (t) =
     path.join(os.tmpdir(), "urma-exact-diagnostics-disabled-"),
   );
   const file = path.join(directory, "debug.jsonl");
+  const previousFile = process.env.URMA_DEBUG_FILE;
+  process.env.URMA_DEBUG_FILE = file;
+  t.after(() => {
+    if (previousFile === undefined) delete process.env.URMA_DEBUG_FILE;
+    else process.env.URMA_DEBUG_FILE = previousFile;
+  });
   t.after(() => rm(directory, { recursive: true, force: true }));
   const value = await withExactFrameDiagnostics(
     false,

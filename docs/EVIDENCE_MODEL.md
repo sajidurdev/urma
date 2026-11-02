@@ -1,4 +1,4 @@
-# Evidence model
+# Tool reference
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/docs/assets/evidence-model.png" alt="Urma evidence model" width="100%" />
@@ -198,22 +198,19 @@ decodes a copy of the video for navigation.
 
 The response includes an image panel, its resource link, and a `cells` array
 with each sample's timestamp and provenance. `requestedInterval` records the
-range requested. `observedCoverage.sampleTimestampsMs` records the returned
-samples, and `adjacentSpacingMs` records the gaps between them. Coverage is
-`sample-points-only`, with `continuous: false`.
+range requested. `observedCoverage` records the returned sample times in
+`sampleTimestampsMs` and their spacing in `adjacentSpacingMs`.
+
+Overview times are nominal (`samplingGaps.timestampBasis` is `"nominal"`).
+Use them to locate moments for exact-frame requests. `observedCoverage` reports
+`kind: "sample-points-only"` and `continuous: false`; sample spacing does not
+establish continuous coverage.
 
 `samplingGaps` reports up to five largest gaps in the requested interval,
 considering both the gaps between samples and the interval edges. Each gap has
 source-global `startMs` and `endMs` bounds and a `durationSeconds` value. Gaps are
 ordered by decreasing duration, with earlier gaps first on ties.
-`scope: "response"` means only this response's samples contribute; samples from
-earlier calls do not fill its gaps.
-For overviews, `timestampBasis: "nominal"` identifies the reported sample times.
-
-Current overview timestamps are nominal sample times. An overview is useful
-for finding a likely scene; requesting exact frames at its timestamps is a
-separate operation. Cell spacing does not guarantee observation of the video
-between those cells.
+Only samples returned by this response contribute (`scope: "response"`).
 
 Repeated overviews report their relationship in `sampling.sampleReuse`:
 
@@ -269,6 +266,9 @@ Urma selects the first decodable presentation frame at or after each requested
 time. A target need not coincide with a video's frame boundary. Returned
 `atMs`, `timestampMs`, and `requestedAtMs` values record the requested times;
 they are not measured decoder presentation timestamps.
+
+Local-file requests and sidecar captions use time relative to the container's
+start, including when its underlying media timestamps begin at a nonzero value.
 
 Frame responses also include `samplingGaps`, with `timestampBasis: "requested"`.
 For bursts, its interval is the requested range. Explicit point requests have
@@ -357,10 +357,12 @@ Each tool also returns `stateResource`, with this URI form:
 urma://investigation/<investigationId>/state
 ```
 
-It reports the investigation's saved source, acquisition, cache, artifact,
-and presentation state. Source data can be cached across investigations,
-while each investigation records its own returned evidence. A state resource
-that exceeds the 32 MiB read limit fails rather than returning truncated JSON.
+It reports the source reference and snapshot revision, call counts, measured
+network usage, cache summaries, sampling gaps, and records of returned captions
+and images.
+Source data can be cached across investigations, while each investigation
+records which evidence it has returned. A state resource that exceeds the
+32 MiB read limit fails rather than returning truncated JSON.
 
 ## Errors
 

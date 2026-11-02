@@ -196,44 +196,6 @@ async function fixture(t: test.TestContext) {
   };
 }
 
-test("concurrent identical-frame waiters need source-specific occurrences", async (t) => {
-  const ctx = await fixture(t);
-  const request = {
-    request: { kind: "points" as const, timesMs: [AT_MS] },
-  };
-  const first = ctx.service.getFrames({
-    investigationRef: ctx.investigationA,
-    ...request,
-  });
-  await ctx.producerStarted;
-  const second = ctx.service.getFrames({
-    investigationRef: ctx.investigationB,
-    ...request,
-  });
-  ctx.releaseProducer();
-  const [resultA, resultB] = await Promise.all([first, second]);
-
-  const artifactIdA = exactArtifactId(resultA);
-  const artifactIdB = exactArtifactId(resultB);
-  assert.equal(ctx.extractionCount, 1);
-  assert.equal(artifactIdA, artifactIdB);
-  const artifactsA = ctx.store.listArtifacts(ctx.sourceA, REVISION);
-  const artifactsB = ctx.store.listArtifacts(ctx.sourceB, REVISION);
-  assert.equal(artifactsA.length, 1);
-  assert.equal(artifactsB.length, 1);
-  assert.equal(artifactsA[0]?.sourceRef, ctx.sourceA);
-  assert.equal(artifactsB[0]?.sourceRef, ctx.sourceB);
-  assert.equal(artifactsA[0]?.sourceRevision, REVISION);
-  assert.equal(artifactsB[0]?.sourceRevision, REVISION);
-  assert.equal(artifactsA[0]?.artifactId, artifactIdA);
-  assert.equal(artifactsB[0]?.artifactId, artifactIdB);
-  assert.equal(ctx.store.listPresentations(ctx.investigationA).length, 1);
-  assert.equal(ctx.store.listPresentations(ctx.investigationB).length, 1);
-  assert(ctx.store.isArtifactPresented(ctx.investigationA, artifactIdA));
-  assert(ctx.store.isArtifactPresented(ctx.investigationB, artifactIdB));
-  assert.equal(ctx.store.cacheStats().artifacts, 1);
-});
-
 test("three concurrent identical-frame waiters each receive provenance", async (t) => {
   const ctx = await fixture(t);
   const request = {

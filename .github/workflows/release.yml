@@ -284,13 +284,13 @@ jobs:
           }
           NODE
 
-      - name: Compatibility gauntlet
+      - name: Provider compatibility checks
         shell: bash
         env:
           URMA_RUN_COMPAT: "1"
           URMA_COMPAT_TIER: ""
           URMA_COMPAT_INCLUDE_UNTESTED: "1"
-          URMA_COMPAT_REGRESSION_STATUS: "release artifact compatibility gauntlet"
+          URMA_COMPAT_REGRESSION_STATUS: "provider checks using the packed release"
         run: pnpm exec node dist/compat/run.js
 
       - name: Generate SHA-256 for the exact tarball
@@ -389,7 +389,7 @@ jobs:
             label: Latest maintained Node.js 24
           - version: "26"
             id: node-26-latest
-            label: Latest current Node.js 26
+            label: Latest maintained Node.js 26
         target:
           - name: Windows x64
             id: windows-x64

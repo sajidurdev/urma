@@ -601,7 +601,7 @@ export function recordDiagnosticSubprocess(
   currentExactFrameDiagnosticTrace()?.recordSubprocess(name, wallMs, role);
 }
 
-/** Write opt-in diagnostics to stderr and the debug file */
+/** Write enabled diagnostics to stderr and, when configured, the debug file. */
 export function diagnosticLog(
   enabled: boolean,
   event: string,

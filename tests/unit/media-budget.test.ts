@@ -160,7 +160,7 @@ async function context(
   return { directory, config, store, blobs, ref };
 }
 
-test("v0.1 safety budgets retain their permanent default ceilings", () => {
+test("default remote media byte and time limits stay bounded", () => {
   const limits = loadConfig({}).limits;
   assert.equal(limits.maxTargetedMediaBytes, 64 * 1024 * 1024);
   assert.equal(limits.maxNavigationCopyBytes, 256 * 1024 * 1024);

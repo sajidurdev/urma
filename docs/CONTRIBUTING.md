@@ -21,19 +21,19 @@ From the repository root:
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm build
-pnpm typecheck
+pnpm check
 ```
 
-Run the unit and integration suites with:
+`pnpm check` type-checks the project and runs both test suites. To run a suite
+separately:
 
 ```sh
 pnpm test:unit
 pnpm test:integration
 ```
 
-Each test command builds first. `pnpm check` runs the type-check and both
-suites. For package metadata, CI, or release changes, also run:
+Each test command builds first. For package metadata, CI, or release changes,
+also run:
 
 ```sh
 node scripts/validate-metadata.mjs

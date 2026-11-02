@@ -185,7 +185,7 @@ export function selectTrack(
   if (!selected) {
     throw new UrmaError(
       "CAPTIONS_UNAVAILABLE",
-      "This source has no supported native or allowed local sidecar caption track; Urma v0.1 does not perform speech-to-text",
+      "This source has no supported native or allowed local sidecar caption track; Urma does not perform speech-to-text",
     );
   }
   return selected;
