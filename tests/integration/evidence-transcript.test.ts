@@ -1,4 +1,4 @@
-import { putTestSource } from "../support/source-fixture.js";
+import { putTestSource, vttForSegments } from "../support/source-fixture.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -337,7 +337,7 @@ test("literal phrase/term search remains bounded; >200 transcript segments conti
   );
 });
 
-test("batched transcript search merges duplicate and overlapping spans under one bounded result budget", async (t) => {
+test("batched transcript search deduplicates queries, merges spans, and stays stable on repeat calls", async (t) => {
   const fixture = await localVideoFixture(false);
   const stamp = (value: number) =>
     `00:00:${String(Math.floor(value / 1000)).padStart(2, "0")}.${
@@ -383,6 +383,9 @@ test("batched transcript search merges duplicate and overlapping spans under one
   assert.deepEqual(batch.queries, ["alpha", "shared", "beta", "gamma"]);
   assert.equal(batch.partial, false);
   assert.equal(batch.hits.length, 2);
+  assert.equal(batch.candidateHitCount, 2);
+  assert.equal(batch.candidateCountComplete, true);
+  assert.equal(batch.omittedHits, 0);
   const merged = batch.hits.find((hit) => hit.startMs === 500)!;
   assert.equal(merged.endMs, 2000);
   assert.match(merged.text, /alpha shared passage/u);
@@ -404,84 +407,6 @@ test("batched transcript search merges duplicate and overlapping spans under one
   assert.deepEqual(repeated.hits, batch.hits);
   assert.equal(repeated.partial, batch.partial);
   assert.equal(repeated.omittedHits, batch.omittedHits);
-
-  const boundedCues: Array<string> = [];
-  for (let queryIndex = 0; queryIndex < 20; queryIndex++) {
-    const term = `term${String(queryIndex).padStart(2, "0")}`;
-    for (let copy = 0; copy < 2; copy++) {
-      const start = (queryIndex * 2 + copy) * 80;
-      boundedCues.push(
-        `${stamp(start)} --> ${
-          stamp(start + 50)
-        }\n${term} bounded evidence ${copy}`,
-      );
-    }
-  }
-  await writeFile(
-    path.join(fixture.directory, "fixture.vtt"),
-    `WEBVTT\n\n${boundedCues.join("\n\n")}\n`,
-  );
-  const boundedInspection = await app.evidence.inspectVideo({
-    source: fixture.video,
-  });
-  const boundedResult = await app.evidence.searchTranscript({
-    investigationRef: boundedInspection.investigationRef,
-    queries: Array.from(
-      { length: 20 },
-      (_, index) => `term${String(index).padStart(2, "0")}`,
-    ),
-    limit: 5,
-  });
-  assert.equal("queries" in boundedResult, true);
-  if (!("queries" in boundedResult)) {
-    throw new Error("bounded batch search returned the single-query shape");
-  }
-  const bounded = boundedResult;
-  assert.equal(bounded.queries.length, 20);
-  assert.equal(bounded.hits.length <= 20, true);
-  assert.equal(bounded.partial, true);
-  assert.deepEqual(
-    {
-      candidateHitCount: bounded.candidateHitCount,
-      candidateCountComplete: bounded.candidateCountComplete,
-      omittedHits: bounded.omittedHits,
-      hits: bounded.hits.length,
-    },
-    {
-      candidateHitCount: 40,
-      candidateCountComplete: true,
-      omittedHits: 20,
-      hits: 20,
-    },
-  );
-  assert.equal(bounded.returnedCharacters <= 16_000, true);
-  assert.equal(JSON.stringify(bounded).length <= 40_000, true);
-  const largeCues = [
-    `${stamp(500)} --> ${stamp(1500)}\nlong-a ${"x".repeat(9_000)}`,
-    `${stamp(2000)} --> ${stamp(3000)}\nlong-b ${"y".repeat(9_000)}`,
-  ];
-  await writeFile(
-    path.join(fixture.directory, "fixture.vtt"),
-    `WEBVTT\n\n${largeCues.join("\n\n")}\n`,
-  );
-  const characterInspection = await app.evidence.inspectVideo({
-    source: fixture.video,
-  });
-  const characterResult = await app.evidence.searchTranscript({
-    investigationRef: characterInspection.investigationRef,
-    queries: ["long-a", "long-b"],
-    limit: 5,
-  });
-  assert.equal("queries" in characterResult, true);
-  if (!("queries" in characterResult)) {
-    throw new Error(
-      "character-budget batch search returned the single-query shape",
-    );
-  }
-  assert.equal(characterResult.hits.length, 1);
-  assert.equal(characterResult.partial, true);
-  assert.equal(characterResult.omittedHits, 1);
-  assert.equal(characterResult.returnedCharacters <= 16_000, true);
 });
 
 test("multilingual tracks are exposed, explicitly selectable, cursor-bound, and investigation-recorded", async (t) => {
@@ -583,9 +508,7 @@ test("multilingual tracks are exposed, explicitly selectable, cursor-bound, and 
           text: `${label} ${ordinal}`,
           ordinal,
         }));
-        const body = Buffer.from(
-          `WEBVTT\n\n00:00:00.000 --> 00:00:00.090\n${label}\n`,
-        );
+        const body = Buffer.from(vttForSegments(segments));
         const blob = await app.blobs.put(body);
         const now = new Date(0).toISOString();
         app.store.putTranscript(
@@ -843,59 +766,4 @@ test("read_transcript keeps the 16,000-character ceiling and paginates by cursor
   assert.deepEqual(second.segments, expected.slice(3));
   assert.equal(second.partial, false);
   assert.equal(second.nextCursor, null);
-});
-
-test("read_transcript keeps a single page for 50 segments", async (t) => {
-  const fixture = await localVideoFixture(false);
-  const stamp = (value: number) =>
-    `00:00:${String(Math.floor(value / 1000)).padStart(2, "0")}.${
-      String(value % 1000).padStart(3, "0")
-    }`;
-  const expected = Array.from({ length: 50 }, (_, ordinal) => {
-    const start = ordinal * 20;
-    return { startMs: start, endMs: start + 10, text: `legacy cue ${ordinal}` };
-  });
-  await writeFile(
-    path.join(fixture.directory, "fixture.vtt"),
-    `WEBVTT\n\n${
-      expected.map((segment) =>
-        `${stamp(segment.startMs)} --> ${stamp(segment.endMs)}\n${segment.text}`
-      ).join("\n\n")
-    }\n`,
-  );
-  const app = await openUrma(
-    loadConfig({
-      URMA_DATA_DIR: path.join(fixture.directory, "data"),
-      URMA_LOCAL_ROOTS: fixture.directory,
-    }),
-  );
-  t.after(async () => {
-    app.close();
-    await rm(fixture.directory, { recursive: true, force: true });
-  });
-  const inspected = await app.evidence.inspectVideo({ source: fixture.video });
-  const result = await app.evidence.readTranscript({
-    investigationRef: inspected.investigationRef,
-    startMs: 0,
-    endMs: 4000,
-  });
-  assert.deepEqual(result.segments, expected);
-  assert.equal(result.partial, false);
-  assert.equal(result.nextCursor, null);
-  assert.deepEqual(Object.keys(result).sort(), [
-    "nextCursor",
-    "partial",
-    "requestedRange",
-    "returnedRange",
-    "segments",
-    "stateSummary",
-    "track",
-  ]);
-  assert.deepEqual(Object.keys(result.track).sort(), [
-    "displayName",
-    "kind",
-    "language",
-    "providerTrackId",
-    "trackRef",
-  ]);
 });

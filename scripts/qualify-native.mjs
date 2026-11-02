@@ -1024,15 +1024,15 @@ function reportMarkdown(report) {
     "",
     `- ${markdownValue(report.requiredChanges)}.`,
     "",
-    "## Extended lifecycle",
+    "## Scope",
     "",
-    "- Expensive second-generation/fault lifecycle was not duplicated in this native lane. The repository integration suite already covers update publication, interruption atomicity, rollback, tamper/missing-generation detection, and concurrent setup with fault-injection fixtures; this matrix keeps its main path on real upstream artifacts.",
+    "- This run checks a fresh installation using upstream artifacts. Update, rollback, interrupted setup, tampering, and concurrent setup are covered by the separate integration suite.",
     "",
     "## Remaining release boundaries",
     "",
     "- Windows consumer Defender/Smart App Control qualification remains separate from GitHub-hosted runner execution.",
-    "- Provider retention, availability, signature policy, and upstream artifact continuity remain release-time obligations.",
-    "- This report proves only the runner/image and exact artifacts recorded above.",
+    "- Before publishing, confirm the pinned upstream artifacts remain available and meet the signature requirements.",
+    "- Results apply only to the recorded runner, OS image, and artifacts.",
   );
   if (report.failure) lines.push("", "## Failure", "", `- ${markdownValue(report.failure.message)}.`);
   return `${lines.join("\n")}\n`;

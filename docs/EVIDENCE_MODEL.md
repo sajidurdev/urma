@@ -1,4 +1,4 @@
-# Evidence model
+# Tool reference
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/docs/assets/evidence-model.png" alt="Urma evidence model" width="100%" />
@@ -62,6 +62,14 @@ overviews are optional; a frame request can follow inspection directly.
 Urma uses source-provided captions and local sidecars. Supported formats are
 JSON3, WebVTT, and SRT. It does not transcribe audio, merge tracks, translate
 captions, or correct automatic captions.
+
+Each track's caption bytes are pinned on its first successful acquisition for
+a source snapshot. A missing or corrupt cache entry can be repaired with
+identical bytes. Changed downloads or inconsistent existing caption caches
+fail with `SOURCE_UNAVAILABLE`; inspect with `freshness: "refresh"` and use
+the new investigation. This pin starts when captions are acquired, so it does
+not guarantee that a first remote caption download matches the provider's
+content at inspection time.
 
 Both caption tools accept an optional `trackRef` from `inspect_video`. When
 omitted, Urma prefers manual captions, then local sidecars, automatic captions,
@@ -190,14 +198,19 @@ decodes a copy of the video for navigation.
 
 The response includes an image panel, its resource link, and a `cells` array
 with each sample's timestamp and provenance. `requestedInterval` records the
-range requested. `observedCoverage.sampleTimestampsMs` records the returned
-samples, and `adjacentSpacingMs` records the gaps between them. Coverage is
-`sample-points-only`, with `continuous: false`.
+range requested. `observedCoverage` records the returned sample times in
+`sampleTimestampsMs` and their spacing in `adjacentSpacingMs`.
 
-Current overview timestamps are nominal sample times. An overview is useful
-for finding a likely scene; requesting exact frames at its timestamps is a
-separate operation. Cell spacing does not guarantee observation of the video
-between those cells.
+Overview times are nominal (`samplingGaps.timestampBasis` is `"nominal"`).
+Use them to locate moments for exact-frame requests. `observedCoverage` reports
+`kind: "sample-points-only"` and `continuous: false`; sample spacing does not
+establish continuous coverage.
+
+`samplingGaps` reports up to five largest gaps in the requested interval,
+considering both the gaps between samples and the interval edges. Each gap has
+source-global `startMs` and `endMs` bounds and a `durationSeconds` value. Gaps are
+ordered by decreasing duration, with earlier gaps first on ties.
+Only samples returned by this response contribute (`scope: "response"`).
 
 Repeated overviews report their relationship in `sampling.sampleReuse`:
 
@@ -254,6 +267,14 @@ time. A target need not coincide with a video's frame boundary. Returned
 `atMs`, `timestampMs`, and `requestedAtMs` values record the requested times;
 they are not measured decoder presentation timestamps.
 
+Local-file requests and sidecar captions use time relative to the container's
+start, including when its underlying media timestamps begin at a nonzero value.
+
+Frame responses also include `samplingGaps`, with `timestampBasis: "requested"`.
+For bursts, its interval is the requested range. Explicit point requests have
+no range, so the interval is the whole source. These are gaps between requested
+times of returned frames, not measured gaps between decoder presentation times.
+
 With `individual`, the result contains each JPEG and its resource link. With
 `panel`, the result contains one combined JPEG with timestamp labels and links
 to the individual frame artifacts. A panel preserves request order and is
@@ -303,6 +324,11 @@ Include `presentation: "panel"` on each call if you want panels. A cadence page
 gets a panel only when every slot on that page succeeds. Error and unfinished
 slots remain visible in the result and have no frame artifact.
 
+For cadence, `samplingGaps.interval` is the full schedule interval, while only
+successful slots from the current page contribute sample points. Failed,
+unfinished, earlier-page, and future-page targets do not fill those gaps. A page
+with no successful frames reports the whole schedule interval as one gap.
+
 Cursors are signed for the running server process. A cursor from another
 investigation or incompatible snapshot is rejected. After a server restart,
 start again with the original cadence request.
@@ -331,10 +357,12 @@ Each tool also returns `stateResource`, with this URI form:
 urma://investigation/<investigationId>/state
 ```
 
-It reports the investigation's saved source, acquisition, cache, artifact,
-and presentation state. Source data can be cached across investigations,
-while each investigation records its own returned evidence. A state resource
-that exceeds the 32 MiB read limit fails rather than returning truncated JSON.
+It reports the source reference and snapshot revision, call counts, measured
+network usage, cache summaries, sampling gaps, and records of returned captions
+and images.
+Source data can be cached across investigations, while each investigation
+records which evidence it has returned. A state resource that exceeds the
+32 MiB read limit fails rather than returning truncated JSON.
 
 ## Errors
 

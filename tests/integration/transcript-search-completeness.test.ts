@@ -1,4 +1,4 @@
-import { putTestSource } from "../support/source-fixture.js";
+import { putTestSource, vttForSegments } from "../support/source-fixture.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -132,9 +132,7 @@ async function fixture(
         text,
         ordinal,
       }));
-    const blob = await app.blobs.put(
-      Buffer.from(`fixture caption ${track.trackRef}`),
-    );
+    const blob = await app.blobs.put(Buffer.from(vttForSegments(segments)));
     app.store.putTranscript(
       {
         id: trackId,
@@ -256,6 +254,7 @@ test("substring search remains literal and bounded", async (t) => {
     query: "cat",
     limit: 5,
   });
+  assert.equal(result.hits.length, 5);
   assert.equal(
     result.hits.every((hit) => hit.text.includes("concatenate")),
     true,
@@ -317,38 +316,6 @@ test("the segment-scan bound avoids unbounded work and makes a tail-only match i
   assert.equal(result.omittedHits, null);
   assert.equal(result.partial, true);
   assert.match(result.missMeaning ?? "", /bounded search/u);
-});
-
-test("batch search merges overlapping spans while remaining complete when every per-query result fits", async (t) => {
-  const context = await fixture(t, {
-    tracks: [
-      {
-        language: "en",
-        kind: "manual",
-        displayName: "English",
-        providerTrackId: "manual-en",
-        texts: [],
-        spans: [
-          { startMs: 500, endMs: 1_500, text: "alpha shared passage" },
-          { startMs: 1_000, endMs: 2_000, text: "beta overlapping passage" },
-          { startMs: 2_500, endMs: 3_500, text: "gamma separate passage" },
-        ],
-      },
-    ],
-  });
-  const result = await context.app.evidence.searchTranscript({
-    investigationRef: context.investigationRef,
-    queries: ["alpha", "shared", "beta", "gamma"],
-    limit: 5,
-  });
-  assert.equal("queries" in result, true);
-  if (!("queries" in result)) throw new Error("expected batch search output");
-  assert.equal(result.hits.length, 2);
-  assert.equal(result.candidateHitCount, 2);
-  assert.equal(result.candidateCountComplete, true);
-  assert.equal(result.omittedHits, 0);
-  assert.equal(result.partial, false);
-  assert.deepEqual(result.hits[0]!.matchedQueries, ["alpha", "shared", "beta"]);
 });
 
 test("batch global unique-hit cap reports exact omissions after deduplication", async (t) => {

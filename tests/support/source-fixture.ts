@@ -3,6 +3,19 @@ import type { SourceKind } from "../../src/core/model.js";
 import type { SourceRef } from "../../src/core/ids.js";
 import type { UrmaStore } from "../../src/store/store.js";
 
+/** Keep seeded caption bytes consistent with their stored cue rows. */
+export function vttForSegments(
+  segments: readonly Readonly<{ startMs: number; endMs: number; text: string }>[],
+): string {
+  const timestamp = (ms: number) => `${[
+    Math.floor(ms / 3_600_000), Math.floor(ms / 60_000) % 60, Math.floor(ms / 1_000) % 60,
+  ].map(value => String(value).padStart(2, "0")).join(":")}.${String(ms % 1_000).padStart(3, "0")}`;
+  return `WEBVTT\n\n${segments.map(segment =>
+    `${timestamp(segment.startMs)} --> ${timestamp(segment.endMs)}\n${segment.text
+      .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}\n`
+  ).join("\n")}`;
+}
+
 export type TestSourceInput = Readonly<{
   sourceRef: SourceRef;
   kind: SourceKind;

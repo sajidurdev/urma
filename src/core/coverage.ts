@@ -164,3 +164,27 @@ export function largestExactFrameGaps(
 ): Array<{ startMs: number; endMs: number }> {
   return largestUnsampledGaps(durationMs, exactFrameTimestampsMs, 3);
 }
+
+/** Gaps between this response's reported times, including the interval edges. */
+export function summarizeSamplingGaps(
+  startMs: number,
+  endMs: number,
+  pointsMs: readonly number[],
+  timestampBasis: "nominal" | "requested",
+) {
+  assertInterval(startMs, endMs);
+  const gaps = largestUnsampledGaps(
+    endMs - startMs,
+    pointsMs.map((point) => point - startMs),
+  );
+  return {
+    scope: "response" as const,
+    interval: { startMs, endMs },
+    timestampBasis,
+    largestGaps: gaps.map((gap) => ({
+      startMs: startMs + gap.startMs,
+      endMs: startMs + gap.endMs,
+      durationSeconds: (gap.endMs - gap.startMs) / 1_000,
+    })),
+  };
+}

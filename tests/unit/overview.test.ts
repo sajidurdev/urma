@@ -344,6 +344,17 @@ test("overview contract identifies irregular storyboard samples and repeated nar
     [5_000, 2_000, 5_000],
   );
   assert.equal(wide.sampling.resolutionMs, null);
+  assert.deepEqual(wide.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 0, endMs: 20_000 },
+    timestampBasis: "nominal",
+    largestGaps: [
+      { startMs: 12_000, endMs: 20_000, durationSeconds: 8 },
+      { startMs: 0, endMs: 5_000, durationSeconds: 5 },
+      { startMs: 7_000, endMs: 12_000, durationSeconds: 5 },
+      { startMs: 5_000, endMs: 7_000, durationSeconds: 2 },
+    ],
+  });
   assert.deepEqual(
     wide.cells.map((cell) => [
       cell.provenance.fragmentIndex,
@@ -411,6 +422,15 @@ test("overview contract identifies irregular storyboard samples and repeated nar
   assert.equal(sameSamples.sampling.sampleReuse.reusedUnderlyingSamples, true);
   assert.deepEqual(sameSamples.observedCoverage.sampleTimestampsMs, [7_000]);
   assert.deepEqual(sameSamples.observedCoverage.adjacentSpacingMs, []);
+  assert.deepEqual(sameSamples.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 6_000, endMs: 7_500 },
+    timestampBasis: "nominal",
+    largestGaps: [
+      { startMs: 6_000, endMs: 7_000, durationSeconds: 1 },
+      { startMs: 7_000, endMs: 7_500, durationSeconds: 0.5 },
+    ],
+  });
 
   const boundary = await fixture.evidence.getOverview({
     investigationRef: fixture.investigationRef,

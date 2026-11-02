@@ -120,10 +120,11 @@ Downloads have separate limits for targeted media, navigation media, reusable
 media, and wall time. Exceeding a limit stops the process tree and removes
 temporary acquisition data.
 
-Media is checked for video streams, duration, timing, and size before storage.
-JPEG output is checked for valid markers. Captions are parsed before their
-database transaction; a cue larger than the response ceiling is rejected.
-Failed or cancelled acquisition does not create a successful cache record.
+Downloaded media is checked for video streams, duration, timing, and size before
+caching. JPEG output is checked for valid markers. Captions are parsed before
+their database transaction; a cue larger than the response ceiling is rejected.
+A failed or cancelled batch can leave earlier, independently validated outputs
+in the cache.
 
 Artifacts are stored by SHA-256. Writes use temporary files and atomic
 promotion; reads verify the expected path, size, and hash. A missing or corrupt
@@ -147,6 +148,7 @@ that investigation. A guessed hash, cached content, or presentation to another
 investigation does not grant access. These checks track returned evidence;
 they do not authenticate users or provide multi-user isolation.
 
-`URMA_DEBUG` and `URMA_DEBUG_FILE` enable diagnostic logs. Treat those logs as
-sensitive operational data, protect the selected file, and review logs before
-sharing them.
+`URMA_DEBUG=1` enables diagnostic logs on stderr. When debugging is enabled,
+`URMA_DEBUG_FILE` also appends logs to the selected JSONL file. Treat logs as
+sensitive operational data, protect the file, and review logs before sharing
+them.

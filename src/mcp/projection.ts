@@ -132,7 +132,7 @@ function compactSchedule(output: ModelRecord): void {
   }
 }
 
-/** Convert a validated service record to the deterministic public MCP shape */
+/** Select public MCP fields from a validated service result. */
 export function projectMcpOutput(raw: ModelRecord): ModelRecord {
   const identity = identityFrom(raw);
   const output = without(raw, ["stateSummary"]);

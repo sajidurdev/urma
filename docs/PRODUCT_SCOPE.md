@@ -54,16 +54,11 @@ action recognition, or model-based video analysis.
 
 ## Runtime and storage
 
-Urma runs as a local stdio MCP server on native Node.js 22.16+ (22.x), 24.x,
-or 26.x. Supported platforms are Windows x64/arm64, macOS x64/arm64, and Linux
-x64/arm64 with glibc. Setup supplies the required FFmpeg, ffprobe, and yt-dlp
-versions.
-
-The installation, SQLite database, and media cache live in a user-owned local
-data directory. Network data directories are unsupported. Installed versions
-are kept separately so updates can be checked before activation and a retained
-previous version can be restored.
-
 Urma is designed for a single local user and does not provide hosted multi-user
-isolation. MCP clients control how the returned text and images are processed,
-including whether they are sent to a model service.
+isolation. Its installation and cache require a user-owned local data directory.
+MCP clients control where returned text and images are processed, including
+whether they are sent to a model service.
+
+See the [installation requirements](../README.md#requirements) and
+[maintenance commands](../README.md#cli-and-maintenance) for supported platforms,
+runtime setup, and updates.

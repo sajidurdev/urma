@@ -364,6 +364,21 @@ export function isTimestampCovered(
   );
 }
 
+/** Full local inputs use times relative to the container origin, including any video delay. */
+export function isInputRelativeTimestampCovered(
+  coverage: VideoPtsCoverage,
+  inputTimeMs: number,
+): boolean {
+  if (!Number.isSafeInteger(inputTimeMs) || inputTimeMs < 0) return false;
+  const origin = coverage.containerStart;
+  const target = rational(
+    BigInt(inputTimeMs) * origin.denominator + origin.numerator * 1_000n,
+    origin.denominator * 1_000n,
+  )!;
+  // The full input proves its first frame is available for targets before video starts.
+  return compare(target, coverage.end) < 0;
+}
+
 /** Map a source-local timestamp to FFmpeg's input-relative seek position */
 export function physicalSeekMs(
   coverage: VideoPtsCoverage,

@@ -25,8 +25,8 @@ acquisition ──────> Safe Proxy / yt-dlp / ffprobe / ffmpeg
 
 `src/mcp/schemas.ts` validates tool inputs and service results. The projection
 in `src/mcp/projection.ts` selects the public response fields, including source
-references, timestamps, completeness, pagination, and resource links. Richer
-acquisition and presentation records remain in storage.
+references, timestamps, completeness, pagination, and resource links. Storage
+also keeps acquisition details and records of returned results.
 
 The server exposes five tools and two resource templates. `stdio.ts` owns the
 transport and shuts down the application when input closes or the process
@@ -81,10 +81,9 @@ policy and normalization versions used during resolution.
 `inspect_video` creates an investigation tied to a source reference, snapshot
 revision, and duration. Later tool calls use that saved snapshot.
 
-Source-level caches can serve several investigations, but each investigation
-records its own presentations. Finding an existing artifact in the cache does
-not count as returning it to the caller. This separation lets resource reads
-check that an investigation has actually received the requested content.
+A source's cached artifacts can serve several investigations, but each
+investigation records which artifacts it has returned. A cache hit alone
+does not grant access through that investigation's resource links.
 
 ### Captions
 
@@ -123,10 +122,14 @@ of a complete video. The section's requested bounds and validated video-stream
 presentation timestamp (PTS) coverage are stored separately. Acquisition only
 commits a section after media and timing validation succeed.
 
-Decoder seeks use the container start time, which can differ from the first
-video frame's PTS. A complete source copy can supply its first video frame for
-a target before that frame. A bounded section ordinarily needs validated PTS
-coverage of the target.
+Local frame requests are relative to the container start and pass directly to
+FFmpeg. Remote media uses validated PTS coverage and the retained container
+origin to map source targets to seek positions. The container start can differ
+from the first video frame's PTS.
+
+A complete source copy can supply its first video frame for a target before
+video starts. A bounded section ordinarily needs validated PTS coverage of the
+target.
 
 There is a narrow exception for source time zero in HLS. Urma compares the
 section's first decoded RGB image and display geometry with the first decoded
@@ -146,15 +149,9 @@ return mixed slot outcomes, but only an all-success page gets a panel.
 
 ### Fixed cadence
 
-A cadence schedule computes targets from the original start time:
-
-```text
-target(i) = startMs + i * cadenceMs, while target(i) < endMs
-```
-
-The total count is checked before acquisition. Pages default to at most 12
-targets, and schedules default to at most 120. Each slot retains its schedule
-index and a `success`, `error`, or `unfinished` status.
+Cadence pages retain the original schedule's timestamps, so changing page size
+does not resample the remaining interval. The [tool reference](EVIDENCE_MODEL.md#fixed-cadence-schedules)
+defines target calculation, limits, and slot statuses.
 
 Signed continuation cursors bind the investigation, snapshot, schedule, and
 frame-selection contract to a next index. The signing key is process-local,
@@ -168,12 +165,16 @@ version. Artifact identities use the SHA-256 digest of their content. Keeping
 these keys separate allows equivalent requests to share work without treating
 parameters as proof of identical bytes.
 
+Local frame request keys include a timing-contract version, so new requests
+bypass cache entries created under the older timestamp mapping. Saved artifacts
+keep their IDs and resource links.
+
 Artifacts have one of three roles:
 
 | Role | Content |
 | --- | --- |
 | `locator` | Overview images and derived frame panels. |
-| `transport` | Navigation media and bounded media sections used for extraction. |
+| `transport` | Navigation media, reusable video copies, and bounded sections used for extraction. |
 | `evidence` | Exact JPEG frames and transcript artifacts. |
 
 Blobs use this layout under the data directory:
@@ -236,7 +237,8 @@ arguments and an allowlisted environment. Remote FFmpeg and ffprobe inputs
 receive an explicit proxy and restricted protocol list. Local media inputs
 use a read-only file descriptor with an `fd`-only protocol list.
 
-Packaged runtimes use generation-local, receipt-verified native executables.
-Output and media byte limits, deadlines, cancellation, and process-tree
-cleanup bound acquisition work. The [security documentation](SECURITY.md)
-describes these controls and their trust assumptions in detail.
+Packaged runtimes use native executables from the selected installation,
+verified against its receipt. Output and media byte limits, deadlines,
+cancellation, and process-tree cleanup bound acquisition work. The
+[security documentation](SECURITY.md) describes these controls and their
+trust assumptions in detail.

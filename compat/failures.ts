@@ -49,7 +49,7 @@ export function isFixtureFailure(failure: FailureClass): boolean {
 
 function isProviderMetadataTimeout(error: ErrorInfo): boolean {
   if (error.code !== "SOURCE_UNAVAILABLE" || !error.retryable) return false;
-  const match = /failed with exit code 1:\s+ERROR:\s+\[[^\]\r\n]+\]\s+[^\r\n]*Unable to download (?:JSON metadata|webpage):\s+HTTPSConnectionPool\(host=['"]([a-z0-9.-]+)['"], port=443\): Read timed out\b/iu.exec(error.detail);
+  const match = /failed with exit code 1:\s+(?:(?:WARNING|Deprecated Feature):[^\r\n]*\r?\n\s*)*ERROR:\s+\[[^\]\r\n]+\]\s+[^\r\n]*Unable to download (?:JSON metadata|webpage):\s+HTTPSConnectionPool\(host=['"]([a-z0-9.-]+)['"], port=443\): Read timed out\b/iu.exec(error.detail);
   const host = match?.[1]?.toLowerCase();
   return host !== undefined && host.includes(".") && isIP(host) === 0 &&
     !/(?:^|\.)(?:localhost|local|internal|invalid|test)\.?$/u.test(host);

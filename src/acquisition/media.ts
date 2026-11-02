@@ -508,7 +508,9 @@ export function frameEvidenceRepresentation(
   config: UrmaConfig,
   source: ResolvedSource,
 ): Readonly<Record<string, unknown>> {
-  if (source.kind === "local") return { mode: "local-direct" };
+  if (source.kind === "local") {
+    return { mode: "local-direct", timeline: "input-relative-v1" };
+  }
   const bounded = evidenceFormat(source, true);
   if (bounded !== null) {
     return {

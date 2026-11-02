@@ -17,6 +17,7 @@ import { runChecked } from "../../src/subprocess/runner.js";
 type IndividualOutput = Readonly<{
   kind: "exact_points";
   continuousMotion: false;
+  samplingGaps: unknown;
   frames: readonly Readonly<{
     index: number;
     atMs: number;
@@ -28,6 +29,7 @@ type IndividualOutput = Readonly<{
 type PanelOutput = Readonly<{
   kind: "exact_points";
   continuousMotion: false;
+  samplingGaps: unknown;
   presentation: "panel";
   cells: readonly Readonly<{
     index: number;
@@ -125,20 +127,18 @@ test("get_frames panel is bounded, ordered, canonical-resource mapped, and cache
   const tools = await client.listTools();
   const framesTool = tools.tools.find((tool) => tool.name === "get_frames");
   assert(framesTool);
-  assert.equal(
-    framesTool.description,
-    "Get deterministic frame evidence at explicit points, a burst, or fixed cadence. Batch known targets; cadence is discrete, not continuous.",
-  );
   const inputSchema = framesTool.inputSchema as {
-    properties?: Record<string, unknown>;
-    allOf?: Array<{ properties?: Record<string, unknown> }>;
-    required?: readonly string[];
+    oneOf?: Array<{
+      properties?: Record<string, unknown>;
+      required?: readonly string[];
+    }>;
   };
-  assert(
-    inputSchema.properties?.presentation ||
-      inputSchema.allOf?.some((part) => part.properties?.presentation),
-  );
-  assert(!inputSchema.required?.includes("presentation"));
+  assert(inputSchema.oneOf);
+  assert.equal(inputSchema.oneOf.length, 2);
+  for (const variant of inputSchema.oneOf) {
+    assert(variant.properties?.presentation);
+    assert(!variant.required?.includes("presentation"));
+  }
 
   const inspection = structured<{
     investigationRef: string;
@@ -217,24 +217,6 @@ test("get_frames panel is bounded, ordered, canonical-resource mapped, and cache
     1,
   );
 
-  const omitted = structured<IndividualOutput>(
-    await client.callTool({
-      name: "get_frames",
-      arguments: {
-        investigationRef,
-        request: { kind: "points", timesMs: [500, 1_500] },
-      },
-    }),
-    "omitted presentation",
-  );
-  assert.deepEqual(Object.keys(omitted).sort(), [
-    "continuousMotion",
-    "frames",
-    "investigationRef",
-    "kind",
-    "stateResource",
-  ]);
-  assert.equal(omitted.frames.length, 2);
   const omittedResult = await client.callTool({
     name: "get_frames",
     arguments: {
@@ -242,6 +224,26 @@ test("get_frames panel is bounded, ordered, canonical-resource mapped, and cache
       request: { kind: "points", timesMs: [500, 1_500] },
     },
   });
+  const omitted = structured<IndividualOutput>(omittedResult, "omitted presentation");
+  assert.deepEqual(Object.keys(omitted).sort(), [
+    "continuousMotion",
+    "frames",
+    "investigationRef",
+    "kind",
+    "samplingGaps",
+    "stateResource",
+  ]);
+  assert.deepEqual(omitted.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 0, endMs: 5_000 },
+    timestampBasis: "requested",
+    largestGaps: [
+      { startMs: 1_500, endMs: 5_000, durationSeconds: 3.5 },
+      { startMs: 500, endMs: 1_500, durationSeconds: 1 },
+      { startMs: 0, endMs: 500, durationSeconds: 0.5 },
+    ],
+  });
+  assert.equal(omitted.frames.length, 2);
   assert.equal(
     omittedResult.content.filter((item) => item.type === "image").length,
     2,
@@ -280,6 +282,17 @@ test("get_frames panel is bounded, ordered, canonical-resource mapped, and cache
   });
   const panel = structured<PanelOutput>(panelResult, "panel");
   assert.equal(panel.presentation, "panel");
+  assert.deepEqual(panel.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 0, endMs: 5_000 },
+    timestampBasis: "requested",
+    largestGaps: [
+      { startMs: 2_500, endMs: 5_000, durationSeconds: 2.5 },
+      { startMs: 500, endMs: 1_500, durationSeconds: 1 },
+      { startMs: 1_500, endMs: 2_500, durationSeconds: 1 },
+      { startMs: 0, endMs: 500, durationSeconds: 0.5 },
+    ],
+  });
   assert.deepEqual(
     panel.cells.map((cell) => cell.index),
     [1, 2, 3],
@@ -351,7 +364,7 @@ test("get_frames panel is bounded, ordered, canonical-resource mapped, and cache
     canonical.every(
       (artifact) =>
         artifact.role === "evidence" &&
-        artifact.producer.version === "frame-extractor-v2",
+        artifact.producer.version === "local-frame-extractor-v3",
     ),
   );
   const derived = artifacts.find(

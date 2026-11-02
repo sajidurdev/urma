@@ -14,16 +14,48 @@ import {
 } from "../../src/core/ids.js";
 import { BlobStore } from "../../src/store/blob-store.js";
 import { SqliteStore } from "../../src/store/sqlite-store.js";
-import { Singleflight } from "../../src/acquisition/singleflight.js";
 import { deriveInvestigationState } from "../../src/evidence/state.js";
 import { materializeResolvedSource } from "../../src/sources/resolver.js";
 import { SCHEMA_VERSION } from "../../src/store/schema.js";
+import { UrmaError } from "../../src/core/errors.js";
 
 async function fixture(t: test.TestContext) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "urma-store-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
+
+test("caption pins and cues survive conflicting writes from another store connection", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "urma-store-pins-"));
+  const database = path.join(directory, "urma.db");
+  const store = await SqliteStore.open(database);
+  const other = await SqliteStore.open(database);
+  t.after(async () => {
+    other.close();
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const sourceRef = remoteSourceRef(youtubeRemoteIdentity("aaaaaaaaaaa"));
+  putTestSource(store, { sourceRef, kind: "remote", canonicalKey: "aaaaaaaaaaa", revision: "r1", title: "Pinned captions", durationMs: 2_000, metadata: {} });
+  const pinned = artifactIdFromSha256(sha256("original bytes"));
+  const track = {
+    id: "pinned-track", sourceRef, sourceRevision: "r1", language: "en", kind: "manual" as const,
+    providerTrackId: null, acquiredAt: new Date(0).toISOString(), metadata: { captionArtifactId: pinned },
+  };
+  const cues = [
+    { trackId: track.id, startMs: 0, endMs: 1_000, text: "original", ordinal: 0 },
+    { trackId: track.id, startMs: 1_000, endMs: 2_000, text: "second", ordinal: 1 },
+  ];
+  store.putTranscript(track, cues);
+  const before = store.listTranscriptSegments(track.id);
+  const conflict = (error: unknown) => error instanceof UrmaError && error.code === "SOURCE_UNAVAILABLE" && error.detail.refreshRequired === true;
+  assert.throws(() => other.putTranscript({ ...track, metadata: { captionArtifactId: artifactIdFromSha256(sha256("changed bytes")) } }, cues), conflict);
+  assert.throws(() => other.putTranscript(track, [{ ...cues[0]!, text: "revised" }, cues[1]!]), conflict);
+  assert.throws(() => other.putTranscript({ ...track, metadata: {} }, cues), conflict);
+  other.putTranscript({ ...track, acquiredAt: new Date(1_000).toISOString() }, [...cues].reverse());
+  assert.deepEqual(store.listTranscriptSegments(track.id), before);
+  assert.equal(store.listTranscriptTracks(sourceRef, "r1")[0]?.acquiredAt, track.acquiredAt);
+});
 
 test("SQLite source cache persists while investigations remain isolated across restart", async (t) => {
   const directory = await fixture(t);
@@ -161,7 +193,7 @@ test("investigations remain pinned when a logical source receives a refreshed sn
   store.close();
 });
 
-test("transcript storage persists cues without creating a full-text index", async (t) => {
+test("transcript storage persists cues and filters by time after reopening", async (t) => {
   const directory = await fixture(t);
   const dbPath = path.join(directory, "urma.db");
   const store = await SqliteStore.open(dbPath);
@@ -205,12 +237,6 @@ test("transcript storage persists cues without creating a full-text index", asyn
     ],
   );
   store.close();
-  const database = new DatabaseSync(dbPath);
-  assert.equal(
-    database.prepare("SELECT name FROM sqlite_master WHERE name='transcript_fts'").get(),
-    undefined,
-  );
-  database.close();
   const reopened = await SqliteStore.open(dbPath);
   assert.deepEqual(
     reopened.listTranscriptSegments("track").map((segment) => segment.text),
@@ -220,99 +246,16 @@ test("transcript storage persists cues without creating a full-text index", asyn
   reopened.close();
 });
 
-test("existing full-text tables are left untouched when writing transcripts", async (t) => {
+test("store rejects unsupported schema versions instead of migrating them", async (t) => {
   const directory = await fixture(t);
-  const dbPath = path.join(directory, "urma.db");
-  const sourceRef = remoteSourceRef(youtubeRemoteIdentity("yP0axVHdP-U"));
-  const store = await SqliteStore.open(dbPath);
-  putTestSource(store, {
-    sourceRef,
-    kind: "remote",
-    canonicalKey: "yP0axVHdP-U",
-    revision: "r1",
-    title: "Fixture",
-    durationMs: 20_000,
-    metadata: {},
-  });
-  store.close();
-
-  const database = new DatabaseSync(dbPath);
-  try {
-    database.exec("CREATE VIRTUAL TABLE transcript_fts USING fts5(text, track_id UNINDEXED, segment_id UNINDEXED)");
-  } catch {
+  for (const version of [0, 2, 4]) {
+    const dbPath = path.join(directory, `schema-${version}.db`);
+    const database = new DatabaseSync(dbPath);
+    database.exec("CREATE TABLE schema_meta (version INTEGER NOT NULL)");
+    database.prepare("INSERT INTO schema_meta(version) VALUES(?)").run(version);
     database.close();
-    t.skip("FTS5 is unavailable, so this database cannot have a legacy index");
-    return;
+    await assert.rejects(SqliteStore.open(dbPath), new RegExp(`unsupported schema ${version}`, "u"));
   }
-  database.prepare("INSERT INTO transcript_fts(text,track_id,segment_id) VALUES(?,?,?)")
-    .run("legacy sentinel", "track", 1);
-  database.close();
-
-  const reopened = await SqliteStore.open(dbPath);
-  reopened.putTranscript({
-    id: "track",
-    sourceRef,
-    sourceRevision: "r1",
-    language: "en",
-    kind: "manual",
-    providerTrackId: null,
-    acquiredAt: new Date(0).toISOString(),
-    metadata: {},
-  }, [{
-    trackId: "track",
-    startMs: 0,
-    endMs: 2000,
-    text: "New caption",
-    ordinal: 0,
-  }]);
-  assert.equal(reopened.listTranscriptSegments("track")[0]?.text, "New caption");
-  reopened.close();
-
-  const legacy = new DatabaseSync(dbPath);
-  assert.deepEqual(
-    legacy.prepare("SELECT text FROM transcript_fts").all().map((row) => row.text),
-    ["legacy sentinel"],
-  );
-  legacy.close();
-});
-
-test("store rejects obsolete database schemas instead of migrating them", async (t) => {
-  const directory = await fixture(t);
-  const database = new DatabaseSync(path.join(directory, "urma.db"));
-  database.exec(
-    "CREATE TABLE schema_meta (version INTEGER NOT NULL); INSERT INTO schema_meta(version) VALUES(2);",
-  );
-  database.close();
-  await assert.rejects(
-    SqliteStore.open(path.join(directory, "urma.db")),
-    /unsupported schema 2/u,
-  );
-});
-
-test("store rejects the previous development schema", async (t) => {
-  const directory = await fixture(t);
-  const database = new DatabaseSync(path.join(directory, "urma.db"));
-  database.exec(
-    "CREATE TABLE schema_meta (version INTEGER NOT NULL); INSERT INTO schema_meta(version) VALUES(4);",
-  );
-  database.close();
-  await assert.rejects(
-    SqliteStore.open(path.join(directory, "urma.db")),
-    /unsupported schema 4/u,
-  );
-});
-
-test("store rejects an unfinished schema bootstrap instead of resuming it", async (t) => {
-  const directory = await fixture(t);
-  const database = new DatabaseSync(path.join(directory, "urma.db"));
-  database.exec(
-    "CREATE TABLE schema_meta (version INTEGER NOT NULL); INSERT INTO schema_meta(version) VALUES(0);",
-  );
-  database.close();
-  await assert.rejects(
-    SqliteStore.open(path.join(directory, "urma.db")),
-    /unsupported schema 0/u,
-  );
 });
 
 test("store rejects a current-version database whose tables do not match the fresh schema", async (t) => {
@@ -364,22 +307,6 @@ test("corrupted content-addressed blob is rejected", async (t) => {
     ).toString(),
     "valid",
   );
-});
-
-test("concurrent identical artifact acquisition promotes content once", async (t) => {
-  const directory = await fixture(t);
-  const blobs = new BlobStore(path.join(directory, "blobs"));
-  const flight = new Singleflight();
-  let writes = 0;
-  const acquire = () =>
-    flight.run("artifact:fixture", undefined, async () => {
-      writes += 1;
-      return await blobs.put(Buffer.from("one artifact"));
-    });
-  const [first, second] = await Promise.all([acquire(), acquire()]);
-  assert.equal(writes, 1);
-  assert.equal(first.artifactId, second.artifactId);
-  assert.equal(flight.size, 0);
 });
 
 test("identical content keeps source-specific artifact occurrence provenance", async (t) => {

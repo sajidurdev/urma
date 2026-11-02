@@ -45,10 +45,10 @@ export type TargetReleaseManifest = Readonly<{
   licensing: Readonly<{ notices: readonly string[] }>;
 }>;
 
-// Pin the latest verified build of a month; BtbN retains month-end builds for two years.
-const BTBN_RELEASE = "autobuild-2026-09-30-13-08";
-const BTBN_VERSION = "N-127032-g6ae491a26c";
-const YTDLP_VERSION = "2026.08.19";
+// Pin month-end builds; BtbN retains them for two years.
+const BTBN_RELEASE = "autobuild-2026-10-31-12-59";
+const BTBN_VERSION = "N-128227-g4811625b5f";
+const YTDLP_VERSION = "2026.10.26";
 const YTDLP_NOTICE = `https://github.com/yt-dlp/yt-dlp/blob/${YTDLP_VERSION}/LICENSE`;
 const YTDLP_THIRD_PARTY_NOTICE = `https://github.com/yt-dlp/yt-dlp/blob/${YTDLP_VERSION}/THIRD_PARTY_LICENSES.txt`;
 
@@ -200,60 +200,58 @@ function release(
 
 const linuxX64 = btbN(
   "linux-x64-glibc",
-  "ffmpeg-N-127032-g6ae491a26c-linux64-lgpl.tar.xz",
-  "82ccd41f4c04ac6f1633920c83eb4c73c6c9dc954d64da10a2410c1277b83647",
-  140614116,
+  "ffmpeg-N-128227-g4811625b5f-linux64-lgpl.tar.xz",
+  "f7ce163eca978dc3ab761e6c288f5f764ec4326d17c926c8d4f75ed95e77ee4b",
+  140425228,
   "",
 );
 const linuxArm64 = btbN(
   "linux-arm64-glibc",
-  "ffmpeg-N-127032-g6ae491a26c-linuxarm64-lgpl.tar.xz",
-  "1f3190187f4027e2335c2542f6c3a73cf51e81820b200f3c75cfdca0d7a0b624",
-  119163928,
+  "ffmpeg-N-128227-g4811625b5f-linuxarm64-lgpl.tar.xz",
+  "3c620620e5836f6e48b37883e2a84ce20286e4f5585574c54ba4bc11edba61af",
+  121614672,
   "",
 );
 const windowsX64 = btbN(
   "windows-x64",
-  "ffmpeg-N-127032-g6ae491a26c-win64-lgpl.zip",
-  "c73ad424c5f9d94dd48815b4d3531e57130cb9f5c3dc8f21f4aa4e1fdb0658e3",
-  176142306,
+  "ffmpeg-N-128227-g4811625b5f-win64-lgpl.zip",
+  "6550f7abc950128fbb0069b4552f2972baccf5fbd819f2fd0abbe4ceb8d48734",
+  175264885,
   ".exe",
 );
-// The September winarm64 build crashes at startup (-version) on the native ARM64 runner.
+// Requalify ARM64 startup: the September build crashed on the native runner.
 const windowsArm64 = btbN(
   "windows-arm64",
-  "ffmpeg-N-126342-gf88b741dbf-winarm64-lgpl.zip",
-  "050be15329851af86bba7f06c08dc6bdeaf9819e2269d945a9f33d61ab0149ad",
-  98448796,
+  "ffmpeg-N-128227-g4811625b5f-winarm64-lgpl.zip",
+  "742afe9b16d5aff391180d2f6be836b32e904f17ee5f304af7733642395582bd",
+  123255806,
   ".exe",
-  "autobuild-2026-08-31-13-27",
-  "N-126342-gf88b741dbf",
 );
 
 export const RELEASE_MANIFESTS: Readonly<Record<TargetPlatform, TargetReleaseManifest>> = {
   "windows-x64": release(
     "windows-x64",
-    "release-qualified minimum Windows platform is maintained in CI metadata",
+    "Windows 10 22H2 or later; release-qualified platform is maintained in CI metadata",
     windowsX64,
     btbNProbe(windowsX64),
     standaloneYtDlp(
       "windows-x64",
       "yt-dlp_win.zip",
-      "30b4c14aafab6082becff7881e41b76df46dc43ea7633479410a91e29da492bf",
-      18087041,
+      "fd51b212cf8380c7a52ee08c0d6be7f3c59b2f2c832eaf7b45acfae6eab57419",
+      23885596,
       "yt-dlp.exe",
     ),
   ),
   "windows-arm64": release(
     "windows-arm64",
-    "release-qualified minimum Windows platform is maintained in CI metadata",
+    "Windows 10 22H2 or later; release-qualified platform is maintained in CI metadata",
     windowsArm64,
     btbNProbe(windowsArm64),
     standaloneYtDlp(
       "windows-arm64",
       "yt-dlp_win_arm64.zip",
-      "2ad49db7429a6204721f711a44199a8c9fa8d5df2183dd7fedc4ef6c9e2e50d3",
-      21463236,
+      "5eaa4c61f3c09189f3a551bf1855c13aad61fb865cc33f06012a6c2dbe287a45",
+      23179217,
       "yt-dlp_arm64.exe",
     ),
   ),
@@ -265,8 +263,8 @@ export const RELEASE_MANIFESTS: Readonly<Record<TargetPlatform, TargetReleaseMan
     standaloneYtDlp(
       "linux-x64-glibc",
       "yt-dlp_linux.zip",
-      "32e72032766bef9199d99d15beb69fd52e46df8f8b06f0d8745db59e04d339e9",
-      40516244,
+      "f34053415136e55073dd64ba5326d161ecc23ce0e98c081d8752867b37809450",
+      41236547,
       "yt-dlp_linux",
     ),
   ),
@@ -278,8 +276,8 @@ export const RELEASE_MANIFESTS: Readonly<Record<TargetPlatform, TargetReleaseMan
     standaloneYtDlp(
       "linux-arm64-glibc",
       "yt-dlp_linux_aarch64.zip",
-      "4e27ad43f3a34bacffd078694eb3edbb4e3b378e7da44edab2be02e98555516e",
-      40213537,
+      "74708e707e8fa8177c8347e58152337edf320149cd7b225defd453f7cde47822",
+      40835009,
       "yt-dlp_linux_aarch64",
     ),
   ),
@@ -289,11 +287,11 @@ export const RELEASE_MANIFESTS: Readonly<Record<TargetPlatform, TargetReleaseMan
     macArtifact(
       "ffmpeg",
       "Martin Riedl",
-      "9.0.1",
-      "1787081194_9.0.1",
-      "https://ffmpeg.martin-riedl.de/download/macos/amd64/1787081194_9.0.1/ffmpeg.zip",
-      "5bdead62ff504ab9b447cc72b212c4fb481e3f7de5877d427a51bee8136dda40",
-      33847553,
+      "9.0.2",
+      "1789931006_9.0.2",
+      "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffmpeg.zip",
+      "7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4",
+      33816391,
       "ffmpeg",
       ["https://ffmpeg.martin-riedl.de/"],
       "Martin Riedl signed Intel build; preserve upstream signature and release configuration",
@@ -301,11 +299,11 @@ export const RELEASE_MANIFESTS: Readonly<Record<TargetPlatform, TargetReleaseMan
     macArtifact(
       "ffprobe",
       "Martin Riedl",
-      "9.0.1",
-      "1787081194_9.0.1",
-      "https://ffmpeg.martin-riedl.de/download/macos/amd64/1787081194_9.0.1/ffprobe.zip",
-      "34511bbcf1988ad2886023bf5ace4f44cf62e6defeb3d194d6f7619e5b061f7f",
-      33750750,
+      "9.0.2",
+      "1789931006_9.0.2",
+      "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffprobe.zip",
+      "2322438ed2f6319a691291b247d09c69dcaa3a982460d1f269a7e1af335cfdfd",
+      33719233,
       "ffprobe",
       ["https://ffmpeg.martin-riedl.de/"],
       "Martin Riedl signed Intel build; preserve upstream signature and release configuration",
@@ -313,8 +311,8 @@ export const RELEASE_MANIFESTS: Readonly<Record<TargetPlatform, TargetReleaseMan
     standaloneYtDlp(
       "macos-x64",
       "yt-dlp_macos.zip",
-      "07e54b0865303c864006925913bce2604f8ee8cc6f18699bac9c309f9328a6d8",
-      53923637,
+      "20d98fa608998eff87d1d35a6e9fb65e4b874639a6cc89addc19da3becde3ef1",
+      54165284,
       "yt-dlp_macos",
     ),
   ),
@@ -324,11 +322,11 @@ export const RELEASE_MANIFESTS: Readonly<Record<TargetPlatform, TargetReleaseMan
     macArtifact(
       "ffmpeg",
       "Martin Riedl",
-      "9.0.1",
-      "1787073674_9.0.1",
-      "https://ffmpeg.martin-riedl.de/download/macos/arm64/1787073674_9.0.1/ffmpeg.zip",
-      "8287a1b2229e05eb41859f073e18e6c52c60a778f2f5e6881070fe51b79407fe",
-      28447413,
+      "9.0.2",
+      "1789931890_9.0.2",
+      "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip",
+      "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
+      28395699,
       "ffmpeg",
       ["https://ffmpeg.martin-riedl.de/"],
       "Martin Riedl signed Apple Silicon build; preserve upstream signature and release configuration",
@@ -336,11 +334,11 @@ export const RELEASE_MANIFESTS: Readonly<Record<TargetPlatform, TargetReleaseMan
     macArtifact(
       "ffprobe",
       "Martin Riedl",
-      "9.0.1",
-      "1787073674_9.0.1",
-      "https://ffmpeg.martin-riedl.de/download/macos/arm64/1787073674_9.0.1/ffprobe.zip",
-      "102a26b8940a053298d9929bfaae71e4b6ef65ba5f19a99a88c433108560741a",
-      28370930,
+      "9.0.2",
+      "1789931890_9.0.2",
+      "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffprobe.zip",
+      "fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6",
+      28317701,
       "ffprobe",
       ["https://ffmpeg.martin-riedl.de/"],
       "Martin Riedl signed Apple Silicon build; preserve upstream signature and release configuration",
@@ -348,8 +346,8 @@ export const RELEASE_MANIFESTS: Readonly<Record<TargetPlatform, TargetReleaseMan
     standaloneYtDlp(
       "macos-arm64",
       "yt-dlp_macos.zip",
-      "07e54b0865303c864006925913bce2604f8ee8cc6f18699bac9c309f9328a6d8",
-      53923637,
+      "20d98fa608998eff87d1d35a6e9fb65e4b874639a6cc89addc19da3becde3ef1",
+      54165284,
       "yt-dlp_macos",
     ),
   ),

@@ -48,7 +48,7 @@ format limitations.
 ### Requirements
 
 - Native Node.js `>=22.16.0 <23`, `>=24.0.0 <25`, or `>=26.0.0 <27`.
-- Windows x64/arm64, macOS x64/arm64, or Linux x64/arm64 with glibc.
+- Windows 10 22H2 or later (x64/arm64), macOS x64/arm64, or Linux x64/arm64 with glibc.
 - A user-owned local directory with at least 1 GiB free for the installation.
 
 Setup installs the required versions of FFmpeg, ffprobe, and yt-dlp. You only
@@ -68,7 +68,7 @@ selected.
 For a repeatable installation, pin the package version:
 
 ```sh
-npx -y urma-mcp@0.1.0 setup
+npx -y urma-mcp@0.2.0 setup
 ```
 
 Urma uses these default data directories:
@@ -221,7 +221,7 @@ the [tool reference](https://github.com/sajidurdev/urma/blob/main/docs/EVIDENCE_
 Run setup again to update Urma. Restart the MCP client to use the new
 installation; an already running server keeps its current version.
 
-The npm version command reports the package selected by the tag:
+To see the version selected by npm's `latest` tag:
 
 ```sh
 npx -y urma-mcp@latest --version

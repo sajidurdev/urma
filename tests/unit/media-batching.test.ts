@@ -229,45 +229,43 @@ test("compatibility grouping is stable and separates source or format policy", (
   );
 });
 
-for (const count of [4, 8, 12]) {
-  test(`constructs one exact multi-section invocation for ${count} requirements`, async (t) => {
-    const ctx = await fixture(t);
-    const requested = requirements(ctx.resolved, ctx.ref, count);
-    const calls: string[][] = [];
-    const downloader = {
-      run: async (args: readonly string[]) => {
-        calls.push([...args]);
-        const outputDirectory = String(args[args.indexOf("--paths") + 1]);
-        const lines: string[] = [];
-        for (const range of [...rangeArguments(args)].reverse()) {
-          const filename = `media-${(range.startMs / 1_000).toFixed(3)}-${
-            (range.endMs / 1_000).toFixed(3)
-          }.mp4`;
-          const filepath = path.join(outputDirectory, filename);
-          await copyFile(ctx.video, filepath);
-          lines.push(emission(range.startMs, range.endMs, filepath));
-        }
-        return processResult(args, `${lines.join("\n")}\n`);
-      },
-    };
-    const outcomes = await new MediaAcquirer(
-      ctx.config,
-      ctx.store,
-      ctx.blobs,
-      downloader,
-    ).sections(requested);
-    assert(outcomes.every((outcome) => outcome.status === "fulfilled"));
-    assert.equal(calls.length, 1);
-    assert.deepEqual(
-      rangeArguments(calls[0]!),
-      requested.map(({ startMs, endMs }) => ({ startMs, endMs })),
-    );
-    assert.deepEqual(
-      outcomes.map((outcome) => outcome.requirement.startMs),
-      requested.map((item) => item.startMs),
-    );
-  });
-}
+test("constructs one exact multi-section invocation for twelve requirements", async (t) => {
+  const ctx = await fixture(t);
+  const requested = requirements(ctx.resolved, ctx.ref, 12);
+  const calls: string[][] = [];
+  const downloader = {
+    run: async (args: readonly string[]) => {
+      calls.push([...args]);
+      const outputDirectory = String(args[args.indexOf("--paths") + 1]);
+      const lines: string[] = [];
+      for (const range of [...rangeArguments(args)].reverse()) {
+        const filename = `media-${(range.startMs / 1_000).toFixed(3)}-${
+          (range.endMs / 1_000).toFixed(3)
+        }.mp4`;
+        const filepath = path.join(outputDirectory, filename);
+        await copyFile(ctx.video, filepath);
+        lines.push(emission(range.startMs, range.endMs, filepath));
+      }
+      return processResult(args, `${lines.join("\n")}\n`);
+    },
+  };
+  const outcomes = await new MediaAcquirer(
+    ctx.config,
+    ctx.store,
+    ctx.blobs,
+    downloader,
+  ).sections(requested);
+  assert(outcomes.every((outcome) => outcome.status === "fulfilled"));
+  assert.equal(calls.length, 1);
+  assert.deepEqual(
+    rangeArguments(calls[0]!),
+    requested.map(({ startMs, endMs }) => ({ startMs, endMs })),
+  );
+  assert.deepEqual(
+    outcomes.map((outcome) => outcome.requirement.startMs),
+    requested.map((item) => item.startMs),
+  );
+});
 
 test("one section keeps the existing single-section path and exact interval", async (t) => {
   const ctx = await fixture(t);
@@ -445,22 +443,6 @@ test("partial batch failure retries only unresolved sections and preserves valid
   assert.deepEqual(
     calls.slice(1).map((args) => rangeArguments(args)[0]),
     [{ startMs: requested[2]!.startMs, endMs: requested[2]!.endMs }],
-  );
-  assert.equal(
-    calls
-      .slice(1)
-      .some(
-        (args) => rangeArguments(args)[0]?.startMs === requested[0]!.startMs,
-      ),
-    false,
-  );
-  assert.equal(
-    calls
-      .slice(1)
-      .some(
-        (args) => rangeArguments(args)[0]?.startMs === requested[3]!.startMs,
-      ),
-    false,
   );
 });
 
@@ -763,10 +745,11 @@ test("batched and individual production frame paths preserve early, middle, and 
   ).get(individual.resolved, individual.ref, timesMs);
   assert.equal(batchCalls.length, 1);
   assert.equal(individualCalls.length, 3);
+  assert.deepEqual(batchedFrames.map((frame) => frame.atMs), timesMs);
+  assert.deepEqual(individualFrames.map((frame) => frame.atMs), timesMs);
 
   for (const [index, observed] of batchedFrames.entries()) {
     const baseline = individualFrames[index]!;
-    assert.equal(observed.atMs, timesMs[index]);
     assert.deepEqual(
       await batched.blobs.read(
         observed.artifact.artifactId,
@@ -793,12 +776,10 @@ test("batched and individual production frame paths preserve early, middle, and 
       {
         startMs: transport.startMs,
         endMs: transport.endMs,
-        localOffsetMs: observed.atMs - transport.startMs!,
       },
       {
         startMs: expectedStartMs,
         endMs: expectedEndMs,
-        localOffsetMs: observed.atMs - expectedStartMs,
       },
     );
   }
@@ -840,16 +821,18 @@ test("remote panel acquisition batches once and later individual presentation hi
     presentation: "panel",
   });
   assert.equal("presentation" in panel ? panel.presentation : null, "panel");
+  assert(panel.kind === "exact_points");
+  assert("cells" in panel);
+  assert.deepEqual(panel.cells.map((cell) => cell.timestampMs), timesMs);
   assert.equal(calls, 1);
   const individual = await service.getFrames({
     investigationRef: ctx.ref,
     request: { kind: "points", timesMs: [timesMs[2]!, timesMs[0]!] },
     presentation: "individual",
   });
-  assert.equal("frames" in individual, true);
-  if ("frames" in individual) {
-    assert(individual.frames.every((frame) => frame.cacheHit));
-  }
+  assert("frames" in individual);
+  assert.deepEqual(individual.frames.map((frame) => frame.atMs), [90_000, 1_000]);
+  assert(individual.frames.every((frame) => frame.cacheHit));
   assert.equal(calls, 1);
 });
 

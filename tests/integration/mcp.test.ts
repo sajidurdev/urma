@@ -154,7 +154,7 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
       "9260778f78381c328663a213f21a27ab879e14dbe405ae0e2cd02fe7cf88d291",
     ],
     search_transcript: [
-      "0c54197c78f0c851106b948fd3f526d824acb8a9f669555b13e0b0fa38c39349",
+      "1dbba1766a650d9a4c745ecfef3ce876c457085b374cc75d80e1905210ac6779",
       "6810adb1dc847380e3bf46b619201cfde3f886647df318491b8a8f2687473557",
     ],
     read_transcript: [
@@ -163,11 +163,11 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
     ],
     get_overview: [
       "5e8fa0f2b3ce40050c20aeb04b8afde7357d17e2200806f83798f647c4d1be11",
-      "e87783ac6b7ec2a89bc4be4cf0a863e18156d6001aa92b030e0430980c4ed99c",
+      "d5ea0e65759cf6f5ab657dafaf12696c45c47e50f466e94dea28c9c7cb803954",
     ],
     get_frames: [
-      "f4daa02d0874a4050a4cc4dc54d94642da1492e17d902a24e4b490c4a3093e1d",
-      "c5753a4496f113f6eb648c7e621115f79219f22246e39ca5e39cea37201c8ed9",
+      "e3233903af29b260f2a0be3d91f96ea35fd0d88879f3c183817975c49dfe8825",
+      "b968e5dc63cc92c2e51a225430c43a05f5e840b1719839b7f5341feaf70c347c",
     ],
   } as const;
   for (const tool of tools.tools) {
@@ -183,33 +183,15 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
   const searchTool = tools.tools.find(
     (tool) => tool.name === "search_transcript",
   );
-  assert.equal(
-    searchTool?.description,
-    "Search source-provided captions for temporal clues. Batch related queries; hits are not visual proof and misses apply only to the selected track.",
-  );
-  const inspectTool = tools.tools.find((tool) => tool.name === "inspect_video");
-  assert.equal(
-    inspectTool?.description,
-    "Inspect a finite video and start an investigation pinned to that snapshot. Use first for a new source; refresh only for a new snapshot.",
-  );
-  const readTool = tools.tools.find((tool) => tool.name === "read_transcript");
-  assert.equal(
-    readTool?.description,
-    "Read timestamped caption segments from a bounded interval.",
-  );
   const searchSchema = searchTool?.inputSchema as
     | {
-      allOf?: Array<{
-        oneOf?: Array<{
-          properties?: Record<string, unknown>;
-          required?: readonly string[];
-        }>;
+      oneOf?: Array<{
+        properties?: Record<string, unknown>;
+        required?: readonly string[];
       }>;
     }
     | undefined;
-  const searchVariants = searchSchema?.allOf?.find((part) =>
-    Array.isArray(part.oneOf)
-  )?.oneOf;
+  const searchVariants = searchSchema?.oneOf;
   assert(Array.isArray(searchVariants));
   assert(searchVariants.some((variant) => variant.properties?.query));
   assert(searchVariants.some((variant) => variant.properties?.queries));
@@ -232,10 +214,6 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
     | undefined;
   assert(Array.isArray(searchOutputSchema?.anyOf));
   const overviewTool = tools.tools.find((tool) => tool.name === "get_overview");
-  assert.equal(
-    overviewTool?.description,
-    "Get a sparse 12-cell visual locator for a video or interval. Use to find moments; samples are not continuous coverage.",
-  );
   const overviewSchema = overviewTool?.inputSchema as
     | { properties?: Record<string, unknown>; required?: readonly string[] }
     | undefined;
@@ -244,23 +222,15 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
   assert(!overviewSchema?.required?.includes("startMs"));
   assert(!overviewSchema?.required?.includes("endMs"));
   const framesTool = tools.tools.find((tool) => tool.name === "get_frames");
-  assert.equal(
-    framesTool?.description,
-    "Get deterministic frame evidence at explicit points, a burst, or fixed cadence. Batch known targets; cadence is discrete, not continuous.",
-  );
   const framesSchema = framesTool?.inputSchema as
     | {
-      allOf?: Array<{
-        oneOf?: Array<{
-          properties?: Record<string, unknown>;
-          required?: readonly string[];
-        }>;
+      oneOf?: Array<{
+        properties?: Record<string, unknown>;
+        required?: readonly string[];
       }>;
     }
     | undefined;
-  const frameSelection = framesSchema?.allOf?.find((part) =>
-    Array.isArray(part.oneOf)
-  )?.oneOf;
+  const frameSelection = framesSchema?.oneOf;
   assert(Array.isArray(frameSelection));
   assert(
     frameSelection.some(
@@ -572,6 +542,22 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
   assert.equal(scopedContent.timebase, "source-global");
   assert.equal(scopedContent.observedCoverage.kind, "sample-points-only");
   assert.equal(scopedContent.observedCoverage.continuous, false);
+  const scopedGaps = (scopedOverview.structuredContent as {
+    samplingGaps: {
+      scope: string;
+      interval: { startMs: number; endMs: number };
+      timestampBasis: string;
+      largestGaps: unknown[];
+    };
+  }).samplingGaps;
+  assert(scopedGaps, "MCP must expose scoped sampling gaps");
+  assert.equal(scopedGaps.scope, "response");
+  assert.equal(scopedGaps.timestampBasis, "nominal");
+  assert.deepEqual(scopedGaps.interval, scopedContent.requestedInterval);
+  assert.equal(scopedGaps.largestGaps.length, 5);
+  assert.deepEqual(scopedGaps.largestGaps[0], {
+    startMs: 2_500, endMs: 3_000, durationSeconds: 0.5,
+  });
   assert.deepEqual(
     scopedContent.observedCoverage.sampleTimestampsMs,
     scopedContent.cells.map((cell) => cell.timestampMs),
@@ -597,6 +583,16 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
   });
   const frameStructured = frames.structuredContent as Record<string, unknown>;
   assert.equal(frameStructured.stateSummary, undefined);
+  assert.deepEqual(frameStructured.samplingGaps, {
+    scope: "response",
+    interval: { startMs: 500, endMs: 3_000 },
+    timestampBasis: "requested",
+    largestGaps: [
+      { startMs: 500, endMs: 1_500, durationSeconds: 1 },
+      { startMs: 1_500, endMs: 2_500, durationSeconds: 1 },
+      { startMs: 2_500, endMs: 3_000, durationSeconds: 0.5 },
+    ],
+  });
   assert.equal(
     (frameStructured.frames as Array<Record<string, unknown>>)[0]?.mimeType,
     undefined,

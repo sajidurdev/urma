@@ -132,7 +132,7 @@ function setupOptions(
       await writeFile(destination, fixture.archives.get(artifact.url)!);
     },
     qualifyNative: async (_context: QualificationContext) => ({ fixtureVersion: "fake", checks: ["fake-native"] }),
-    probeVersions: async () => ({ ffmpegVersion: "ffmpeg fake", ffprobeVersion: "ffprobe fake", ytdlpVersion: "2026.08.19" }),
+    probeVersions: async () => ({ ffmpegVersion: "ffmpeg fake", ffprobeVersion: "ffprobe fake", ytdlpVersion: "2026.10.26" }),
     mcpSmoke: async () => ["fake-mcp"],
     ...overrides,
   };
