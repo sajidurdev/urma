@@ -172,6 +172,15 @@ for (const offsetSeconds of [0, 7]) {
       assert.equal(frame.cacheHit, false);
     }
     const reopened = await ctx.reopen();
+    const crop = { x: 25, y: 25, w: 50, h: 50 };
+    const cropped = await reopened.evidence.getFrames({ ...request, crop });
+    assert("frames" in cropped);
+    for (const [index, frame] of cropped.frames.entries()) {
+      assert.deepEqual(frame.crop?.pixels, { x: 24, y: 16, width: 48, height: 32 });
+      const artifact = reopened.store.getArtifact(frame.artifactId);
+      assert(artifact);
+      await assertColor(reopened.blobs.pathForHash(artifact.sha256), expected[index]!, `cropped target ${frame.atMs}ms`);
+    }
     const cached = await reopened.evidence.getFrames(request);
     assert("frames" in cached);
     assert(cached.frames.every((frame) => frame.cacheHit));

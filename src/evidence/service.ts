@@ -10,6 +10,8 @@ import {
   type FrameTargetOutcome,
 } from "../acquisition/frames.js";
 import { FramePanelAcquirer } from "../acquisition/frame-panel.js";
+import { DiscoveryAcquirer, DISCOVERY_VERSION, type DiscoveryRequest, type DiscoveryResult } from "../acquisition/discovery.js";
+import { VisualAnalyzer, FRAME_DEDUPLICATION_VERSION } from "../acquisition/visual-analysis.js";
 import { frameEvidenceRepresentation } from "../acquisition/media.js";
 import { OverviewAcquirer } from "../acquisition/overview.js";
 import { startAcquisition } from "../acquisition/records.js";
@@ -22,7 +24,9 @@ import {
   OVERVIEW_CELL_COUNT,
   summarizeSamplingGaps,
   uniformPointsMs,
+  refineGapPoints,
 } from "../core/coverage.js";
+import { validateFrameCrop, type FrameCrop, type FrameCropGeometry } from "../core/frame-crop.js";
 import {
   currentExactFrameDiagnosticTrace,
   withExactFrameDiagnostics,
@@ -84,6 +88,30 @@ const MAX_TRANSCRIPT_CHARACTERS = 16_000;
 const MAX_CACHE_INTERVAL_SUMMARY = 20;
 const MAX_INSPECT_TRACKS = 100;
 
+type RefineRequest = Readonly<{
+  kind: "refine"; startMs?: number | undefined; endMs?: number | undefined; budget: number; basis?: "visual" | "exact" | undefined;
+}>;
+// Keep optional frames access in service types without adding it to panel responses.
+type FrameResult<T> = T extends { frames: unknown } ? T : T & { frames?: never };
+type FramesInput = {
+  investigationRef: InvestigationRef;
+  request?:
+    | { kind: "points"; timesMs: readonly number[] }
+    | { kind: "burst"; startMs: number; endMs: number; count: number }
+    | { kind: "cadence"; startMs: number; endMs: number; cadenceMs: number };
+  cursor?: string; pageSize?: number; maxTargets?: number;
+  presentation?: "individual" | "panel";
+  crop?: FrameCrop; rulers?: boolean;
+  diffHints?: boolean;
+  deduplicate?: boolean;
+  discovery?: DiscoveryResult;
+  refinement?: Readonly<{ policy: "largest-gap-midpoint-v1"; startMs: number; endMs: number; budget: number; basis: "visual" | "exact" }>;
+};
+
+function cropFields(artifact: StoredArtifact): { crop?: FrameCropGeometry } {
+  return artifact.params.crop ? { crop: artifact.producer.crop as FrameCropGeometry } : {};
+}
+
 function normalize(value: string): string {
   return value
     .normalize("NFKC")
@@ -98,6 +126,7 @@ function publicTrack(track: CaptionTrackSummary) {
     kind: track.kind,
     displayName: track.displayName,
     providerTrackId: track.providerTrackId,
+    ...(track.embedded ? { embedded: track.embedded } : {}),
   };
 }
 function sameStrings(
@@ -299,6 +328,7 @@ type FrameScheduleCursorPayload = Readonly<{
   cadenceMs: number;
   totalTargets: number;
   nextIndex: number;
+  crop?: FrameCrop;
 }>;
 
 type NewFrameScheduleCursorPayload = Omit<
@@ -638,7 +668,10 @@ export class EvidenceService {
   readonly overviews: OverviewAcquirer;
   readonly frames: FrameAcquirer;
   readonly framePanels: FramePanelAcquirer;
+  readonly visualAnalyzer: VisualAnalyzer;
+  readonly discovery: DiscoveryAcquirer;
   readonly singleflight = new Singleflight();
+  readonly #pendingRefinements = new Map<InvestigationRef, Set<number>>();
 
   constructor(
     readonly config: UrmaConfig,
@@ -651,12 +684,15 @@ export class EvidenceService {
     this.overviews = new OverviewAcquirer(config, store, blobs, remoteContext);
     this.frames = new FrameAcquirer(config, store, blobs, undefined, remoteContext);
     this.framePanels = new FramePanelAcquirer(config, store, blobs);
+    this.visualAnalyzer = new VisualAnalyzer(config, blobs);
+    this.discovery = new DiscoveryAcquirer(config, store, this.frames, this.visualAnalyzer);
   }
 
   /** Record shared frame artifacts under this investigation's source. */
   #admitFrameArtifacts(
     source: Pick<ResolvedSource, "sourceRef" | "revision" | "kind">,
     frames: readonly ExactFrameResult[],
+    crop?: FrameCrop,
   ): ExactFrameResult[] {
     return frames.map((frame) => {
       const artifact: StoredArtifact = {
@@ -667,7 +703,7 @@ export class EvidenceService {
       this.store.putArtifact(
         artifact,
         {
-          requestKey: exactFrameRequestKey(source, frame.atMs),
+          requestKey: exactFrameRequestKey(source, frame.atMs, crop),
           operation: "frame",
         },
       );
@@ -678,10 +714,11 @@ export class EvidenceService {
   #admitFrameOutcomes(
     source: Pick<ResolvedSource, "sourceRef" | "revision" | "kind">,
     outcomes: readonly FrameTargetOutcome[],
+    crop?: FrameCrop,
   ): FrameTargetOutcome[] {
     return outcomes.map((outcome) => {
       if (outcome.status !== "success") return outcome;
-      const [admitted] = this.#admitFrameArtifacts(source, [outcome]);
+      const [admitted] = this.#admitFrameArtifacts(source, [outcome], crop);
       return { ...outcome, artifact: admitted!.artifact };
     });
   }
@@ -879,6 +916,7 @@ export class EvidenceService {
             kind: selected.kind,
             displayName: selected.displayName,
             providerTrackId: selected.providerTrackId,
+            ...(selected.embedded ? { embedded: selected.embedded } : {}),
             hitCount: hits.length,
             candidateHitCount,
             candidateCountComplete,
@@ -983,6 +1021,7 @@ export class EvidenceService {
           kind: selected.kind,
           displayName: selected.displayName,
           providerTrackId: selected.providerTrackId,
+          ...(selected.embedded ? { embedded: selected.embedded } : {}),
           hitCount: hits.length,
           candidateHitCount: merged.candidateHitCount,
           candidateCountComplete,
@@ -1145,6 +1184,7 @@ export class EvidenceService {
             kind: selected.kind,
             displayName: selected.displayName,
             providerTrackId: selected.providerTrackId,
+            ...(selected.embedded ? { embedded: selected.embedded } : {}),
             requestedStartMs: input.startMs,
             requestedEndMs: input.endMs,
             partial,
@@ -1189,6 +1229,7 @@ export class EvidenceService {
       investigationRef: InvestigationRef;
       startMs?: number;
       endMs?: number;
+      rulers?: boolean;
     },
     signal?: AbortSignal,
   ) {
@@ -1207,7 +1248,7 @@ export class EvidenceService {
       requestKey: deterministicRequestKey(
         source.revision,
         "get_overview",
-        { startMs, endMs },
+        { startMs, endMs, ...(input.rulers ? { rulers: true } : {}) },
         "evidence-api",
       ),
       method: "ffmpeg-panel",
@@ -1217,7 +1258,7 @@ export class EvidenceService {
       const key = deterministicRequestKey(
         source.revision,
         "overview",
-        { startMs, endMs, count: OVERVIEW_CELL_COUNT },
+        { startMs, endMs, count: OVERVIEW_CELL_COUNT, ...(input.rulers ? { rulers: true } : {}) },
         OVERVIEW_CONTRACT_ID,
       );
       const overview = await this.singleflight.run(
@@ -1230,6 +1271,7 @@ export class EvidenceService {
             startMs,
             endMs,
             sharedSignal,
+            input.rulers === true,
           ),
       );
       const artifactResource = investigationArtifactUri(
@@ -1326,6 +1368,7 @@ export class EvidenceService {
           resource: artifactResource,
         },
         cacheHit: overview.cacheHit,
+        ...(input.rulers ? { rulers: true as const } : {}),
         stateSummary,
       };
     } catch (error) {
@@ -1347,6 +1390,10 @@ export class EvidenceService {
       pageSize?: number;
       maxTargets?: number;
       presentation: "individual" | "panel";
+      crop?: FrameCrop;
+      rulers?: boolean;
+      diffHints?: boolean;
+      deduplicate?: boolean;
     },
     source: ResolvedSource,
     signal?: AbortSignal,
@@ -1378,6 +1425,8 @@ export class EvidenceService {
     if (input.cursor !== undefined) {
       if (input.request !== undefined) invalidCursor();
       cursorPayload = parseScheduleCursor(input.cursor);
+      if (input.crop !== undefined && stableJson(input.crop) !== stableJson(cursorPayload.crop ?? null)) invalidCursor();
+      if (cursorPayload.crop !== undefined) input = { ...input, crop: validateFrameCrop(cursorPayload.crop) };
       if (
         (cursorPayload.v !== 1 && cursorPayload.v !== 2) ||
         cursorPayload.kind !== "fixed-cadence" ||
@@ -1468,7 +1517,9 @@ export class EvidenceService {
     }
 
     const representation = stableJson(
-      frameEvidenceRepresentation(this.config, source),
+      input.crop
+        ? { representation: frameEvidenceRepresentation(this.config, source), crop: input.crop }
+        : frameEvidenceRepresentation(this.config, source),
     );
     const representationDigest = sha256(representation);
     if (cursorPayload !== null) {
@@ -1514,6 +1565,8 @@ export class EvidenceService {
           pageStartIndex: nextIndex,
           pageSize,
           presentation: input.presentation,
+          ...(input.crop ? { crop: input.crop } : {}),
+          ...(input.rulers ? { rulers: true } : {}),
         },
         "evidence-api",
       ),
@@ -1524,7 +1577,7 @@ export class EvidenceService {
       const key = deterministicRequestKey(
         source.revision,
         "frames",
-        { timesMs },
+        { timesMs, ...(input.crop ? { crop: input.crop } : {}) },
         "frame-batch",
       );
       const sharedOutcomes = await this.singleflight.run(
@@ -1536,9 +1589,19 @@ export class EvidenceService {
             input.investigationRef,
             timesMs,
             sharedSignal,
+            input.crop,
           ),
       );
-      const outcomes = this.#admitFrameOutcomes(source, sharedOutcomes);
+      const outcomes = this.#admitFrameOutcomes(source, sharedOutcomes, input.crop);
+      const indexedFrames = outcomes.flatMap((outcome, index) => outcome.status === "success" ? [{ ...outcome, index: nextIndex + index }] : []);
+      const grouping = input.deduplicate ? await this.#groupFrames(source, input.investigationRef, indexedFrames, signal) : undefined;
+      const representativeIndices = new Set(grouping?.groups.map((group) => group.representativeIndex));
+      const displayedFrames = grouping ? indexedFrames.filter((frame) => representativeIndices.has(frame.index)) : indexedFrames;
+      const deltaHints = input.diffHints ? await this.#analyzeHints(source, input.investigationRef,
+        indexedFrames, signal) : undefined;
+      const previews = await this.#framePreviews(source, input.investigationRef,
+        displayedFrames,
+        input.rulers === true && (input.presentation === "individual" || outcomes.some((outcome) => outcome.status !== "success")), signal);
       const slots = outcomes.map((outcome, offset) => {
         const index = nextIndex + offset;
         const timing = {
@@ -1560,6 +1623,8 @@ export class EvidenceService {
               outcome.artifact.artifactId,
             ),
             cacheHit: outcome.cacheHit,
+            ...cropFields(outcome.artifact),
+            ...(previews.get(outcome.atMs) ? { preview: previews.get(outcome.atMs)! } : {}),
           };
         }
         if (outcome.status === "error") {
@@ -1601,14 +1666,19 @@ export class EvidenceService {
           successfulOutcomes.length === slots.length
         ? await this.framePanels.get(
           source,
-          successfulOutcomes.map((outcome) => ({
+          displayedFrames.map((outcome) => ({
             atMs: outcome.atMs,
             artifact: outcome.artifact,
           })),
           signal,
+          { rulers: input.rulers === true },
         )
         : null;
-      const presentationArtifactIds = panel ? [panel.artifact.artifactId] : [];
+      if (grouping && panel) grouping.groups.forEach((group, index) => { group.panelIndex = index + 1; });
+      const presentationArtifactIds = [
+        ...(panel ? [panel.artifact.artifactId] : []),
+        ...[...previews.values()].map((preview) => preview.artifactId),
+      ];
       let presentedSuccesses = 0;
       for (const [offset, outcome] of outcomes.entries()) {
         if (outcome.status !== "success") continue;
@@ -1627,8 +1697,10 @@ export class EvidenceService {
             schedulePolicy: FRAME_SCHEDULE_POLICY_VERSION,
             scheduleIndex: nextIndex + offset,
             role: "evidence",
-            ...(presentedSuccesses === 0 && panel
-              ? { presentation: "panel", presentationArtifactIds }
+            ...cropFields(outcome.artifact),
+            ...(presentedSuccesses === 0 && grouping ? { deduplication: grouping } : {}),
+            ...(presentedSuccesses === 0 && presentationArtifactIds.length
+              ? { presentation: input.presentation, presentationArtifactIds }
               : {}),
           },
           presentedAt: new Date().toISOString(),
@@ -1656,6 +1728,7 @@ export class EvidenceService {
           cadenceMs: schedule.cadenceMs,
           totalTargets,
           nextIndex: frontier,
+          ...(input.crop ? { crop: input.crop } : {}),
         })
         : null;
       call.succeed({
@@ -1671,10 +1744,10 @@ export class EvidenceService {
           cacheHits: successfulOutcomes.filter((outcome) => outcome.cacheHit)
             .length,
           canonicalArtifactCount: successCount,
-          imageCount: panel ? 1 : successCount,
+          imageCount: panel ? 1 : displayedFrames.length,
           imageBytes: panel
             ? panel.artifact.byteSize
-            : successfulOutcomes.reduce(
+            : displayedFrames.reduce(
               (sum, outcome) => sum + outcome.artifact.byteSize,
               0,
             ),
@@ -1687,7 +1760,7 @@ export class EvidenceService {
             ? {
               canvasWidth: panel.dimensions.width,
               canvasHeight: panel.dimensions.height,
-              cellCount: slots.length,
+              cellCount: displayedFrames.length,
               panelCacheHit: panel.cacheHit,
             }
             : {}),
@@ -1698,6 +1771,8 @@ export class EvidenceService {
       );
       const base = {
         kind: "scheduled_exact_points" as const,
+        ...(grouping ? { deduplication: grouping } : {}),
+        ...(deltaHints ? { diffHints: deltaHints } : {}),
         continuous: false as const,
         observations: "discrete-points" as const,
         samplingGaps: summarizeSamplingGaps(
@@ -1738,7 +1813,7 @@ export class EvidenceService {
             slot.status === "success"
               ? {
                 index: slot.index,
-                panelIndex: panel ? index + 1 : null,
+                panelIndex: panel ? grouping?.groups.find((group) => group.members.some((member) => member.index === slot.index))?.panelIndex ?? index + 1 : null,
                 requestedAtMs: slot.requestedAtMs,
                 status: slot.status,
                 artifactId: slot.artifactId,
@@ -1746,6 +1821,8 @@ export class EvidenceService {
                 byteSize: slot.byteSize,
                 resource: slot.resource,
                 cacheHit: slot.cacheHit,
+                ...(slot.crop ? { crop: slot.crop } : {}),
+                ...(slot.preview ? { preview: slot.preview } : {}),
               }
               : {
                 index: slot.index,
@@ -1765,10 +1842,11 @@ export class EvidenceService {
               ),
               width: panel.dimensions.width,
               height: panel.dimensions.height,
-              cellCount: slots.length,
+              cellCount: displayedFrames.length,
               cacheHit: panel.cacheHit,
               derived: true as const,
               canonical: false as const,
+              ...(input.rulers ? { rulers: true as const, coordinateSpace: "individual-displayed-source" as const } : {}),
             }
             : null,
           stateSummary,
@@ -1785,23 +1863,180 @@ export class EvidenceService {
     }
   }
 
+  async #framePreviews(
+    source: ResolvedSource, ref: InvestigationRef, frames: readonly ExactFrameResult[],
+    enabled: boolean, signal?: AbortSignal,
+  ) {
+    const previews = new Map<number, {
+      artifactId: StoredArtifact["artifactId"]; resource: string; mimeType: "image/jpeg";
+      byteSize: number; width: number; height: number; derived: true; canonical: false;
+      rulers: true; coordinateSpace: "individual-displayed-source";
+    }>();
+    if (enabled) for (const frame of frames) {
+      const preview = await this.framePanels.get(source, [frame], signal, { rulers: true, individual: true });
+      previews.set(frame.atMs, {
+        artifactId: preview.artifact.artifactId,
+        resource: investigationArtifactUri(ref, preview.artifact.artifactId),
+        mimeType: "image/jpeg", byteSize: preview.artifact.byteSize,
+        width: preview.dimensions.width, height: preview.dimensions.height,
+        derived: true, canonical: false, rulers: true, coordinateSpace: "individual-displayed-source",
+      });
+    }
+    return previews;
+  }
+
+  async #analyzeHints(source: ResolvedSource, ref: InvestigationRef,
+    frames: readonly (ExactFrameResult & { index: number })[], signal?: AbortSignal) {
+    const call = startAcquisition(this.store, {
+      sourceRef: source.sourceRef, sourceRevision: source.revision, investigationRef: ref,
+      operation: "analyze:visual-delta", method: "ffmpeg-decode", debug: this.config.debug,
+      requestKey: deterministicRequestKey(source.revision, "visual-delta", frames.map((frame) => ({ atMs: frame.atMs, artifactId: frame.artifact.artifactId })), "rgb-block-delta-v1"),
+    });
+    try {
+      const result = { ...await this.visualAnalyzer.hints(frames, signal),
+        sourceRef: source.sourceRef, sourceRevision: source.revision };
+      if (Buffer.byteLength(JSON.stringify(result)) > 128 * 1024) throw new UrmaError("OUTPUT_LIMIT_EXCEEDED", "Visual diff hints exceed the 128 KiB analysis payload budget; request fewer frames");
+      call.succeed({ networkBytes: 0, networkAccountingComplete: true, metadata: result });
+      return result;
+    } catch (error) { call.fail(error); throw error; }
+  }
+
+  async #groupFrames(source: ResolvedSource, ref: InvestigationRef,
+    frames: readonly (ExactFrameResult & { index: number })[], signal?: AbortSignal) {
+    const call = startAcquisition(this.store, {
+      sourceRef: source.sourceRef, sourceRevision: source.revision, investigationRef: ref,
+      operation: "analyze:frame-deduplication", method: "ffmpeg-decode", debug: this.config.debug,
+      requestKey: deterministicRequestKey(source.revision, "frame-deduplication",
+        frames.map((frame) => ({ index: frame.index, atMs: frame.atMs, artifactId: frame.artifact.artifactId })), FRAME_DEDUPLICATION_VERSION),
+    });
+    try {
+      const result = await this.visualAnalyzer.group(frames, ref, signal);
+      call.succeed({ networkBytes: 0, networkAccountingComplete: true, metadata: result });
+      return result;
+    } catch (error) { call.fail(error); throw error; }
+  }
+
   async getFrames(
-    input: {
-      investigationRef: InvestigationRef;
-      request?:
-        | { kind: "points"; timesMs: readonly number[] }
-        | { kind: "burst"; startMs: number; endMs: number; count: number }
-        | {
-          kind: "cadence";
-          startMs: number;
-          endMs: number;
-          cadenceMs: number;
-        };
-      cursor?: string;
-      pageSize?: number;
-      maxTargets?: number;
-      presentation?: "individual" | "panel";
-    },
+    input: Omit<FramesInput, "request" | "refinement" | "discovery"> & { request?: FramesInput["request"] | RefineRequest | DiscoveryRequest },
+    signal?: AbortSignal,
+  ): Promise<FrameResult<Awaited<ReturnType<EvidenceService["selectFrames"]>>> & { discovery?: DiscoveryResult }> {
+    if (input.deduplicate !== undefined && typeof input.deduplicate !== "boolean") throw new UrmaError("INVALID_SOURCE", "deduplicate must be a boolean; omit it to retain the default presentation");
+    const { request, ...rest } = input;
+    if (request?.kind !== "discover") {
+      return await this.selectFrames({ ...rest, ...(request ? { request } : {}) }, signal);
+    }
+    if (input.cursor !== undefined || input.pageSize !== undefined || input.maxTargets !== undefined) {
+      throw new UrmaError("INVALID_SOURCE", "Discovery uses its own budget; cadence cursors, pageSize and maxTargets are not supported");
+    }
+    if (input.crop !== undefined) {
+      const crop = validateFrameCrop(input.crop);
+      rest.crop = crop;
+    }
+    const source = resolvedFromInvestigation(this.store, input.investigationRef);
+    const call = startAcquisition(this.store, {
+      sourceRef: source.sourceRef, sourceRevision: source.revision, investigationRef: input.investigationRef,
+      operation: "analyze:visual-discovery", method: "ffmpeg-decode", debug: this.config.debug,
+      requestKey: deterministicRequestKey(source.revision, "discovery", request, DISCOVERY_VERSION),
+    });
+    let discovered: DiscoveryResult;
+    try {
+      discovered = await this.discovery.get(source, input.investigationRef, request, signal);
+      call.succeed({ networkBytes: 0, networkAccountingComplete: true, metadata: discovered });
+    } catch (error) { call.fail(error); throw error; }
+    const timesMs = discovered.candidates.map((candidate) => candidate.requestedAtMs);
+    if (!timesMs.length) {
+      const emptyCall = startAcquisition(this.store, {
+        sourceRef: source.sourceRef, sourceRevision: source.revision, investigationRef: input.investigationRef,
+        operation: "tool:get_frames", method: "cache", debug: this.config.debug,
+        requestKey: deterministicRequestKey(source.revision, "get_frames", request, "evidence-api"),
+      });
+      emptyCall.succeed({ networkBytes: 0, networkAccountingComplete: true, metadata: { discovery: discovered, returnedFrameCount: 0 } });
+      return { kind: "exact_points" as const, continuousMotion: false, frames: [], discovery: discovered,
+        samplingGaps: summarizeSamplingGaps(discovered.interval.startMs, discovered.interval.endMs, [], "requested"),
+        stateSummary: compactState(deriveInvestigationState(this.store, input.investigationRef)) };
+    }
+    const result = await this.#getFrames({ ...rest, request: { kind: "points", timesMs }, discovery: discovered }, signal);
+    if ("schedule" in result) throw new UrmaError("INTERNAL_ERROR", "Discovery point retrieval unexpectedly returned a cadence schedule");
+    const samplingGaps = summarizeSamplingGaps(discovered.interval.startMs, discovered.interval.endMs, timesMs, "requested");
+    return { ...result, discovery: discovered, samplingGaps };
+  }
+
+  private async selectFrames(
+    input: Omit<FramesInput, "request" | "refinement" | "discovery"> & { request?: FramesInput["request"] | RefineRequest },
+    signal?: AbortSignal,
+  ) {
+    if (input.crop !== undefined) input = { ...input, crop: validateFrameCrop(input.crop) };
+    const { request, ...rest } = input;
+    if (request?.kind !== "refine") {
+      return await this.#getFrames({ ...rest, ...(request ? { request } : {}) }, signal);
+    }
+    if (input.cursor !== undefined || input.pageSize !== undefined || input.maxTargets !== undefined) {
+      throw new UrmaError("INVALID_SOURCE", "Refinement uses request.budget (1-12); cursor, pageSize and maxTargets apply only to cadence");
+    }
+    if (signal?.aborted) throw new UrmaError("CANCELLED", "Refinement was cancelled before timestamp selection");
+    const source = resolvedFromInvestigation(this.store, input.investigationRef);
+    const startMs = request.startMs ?? 0;
+    const endMs = request.endMs ?? source.durationMs;
+    try {
+      assertInterval(startMs, endMs, source.durationMs);
+    } catch (cause) {
+      throw new UrmaError("INVALID_SOURCE", `Refinement range [${startMs},${endMs}) must be non-empty and within source duration ${source.durationMs} ms`, { cause });
+    }
+    if (!Number.isSafeInteger(request.budget) || request.budget < 1 || request.budget > 12) {
+      throw new UrmaError("OUTPUT_LIMIT_EXCEEDED", `Refinement budget must be an integer from 1 to 12; received ${String(request.budget)}`);
+    }
+    const basis = request.basis ?? "visual";
+    if (basis !== "visual" && basis !== "exact") throw new UrmaError("INVALID_SOURCE", "Refinement basis must be visual or exact");
+    const history = () => {
+      const evidence = deriveInvestigationState(this.store, input.investigationRef).evidence;
+      return [
+        ...evidence.exactVisualPoints.map((point) => point.atMs),
+        ...evidence.orderedVisualSets.flatMap((set) => set.pointsMs),
+        ...(basis === "visual" ? evidence.sparseVisualSets.flatMap((set) => set.pointsMs) : []),
+      ];
+    };
+    const pending = this.#pendingRefinements.get(input.investigationRef) ?? new Set<number>();
+    const timesMs = refineGapPoints(startMs, endMs, [...history(), ...pending], request.budget);
+    this.#pendingRefinements.set(input.investigationRef, pending);
+    timesMs.forEach((time) => pending.add(time));
+    try {
+      if (!timesMs.length) {
+        const call = startAcquisition(this.store, {
+          sourceRef: source.sourceRef, sourceRevision: source.revision,
+          investigationRef: input.investigationRef, operation: "tool:get_frames",
+          requestKey: deterministicRequestKey(source.revision, "get_frames", request, "evidence-api"),
+          method: "cache", debug: this.config.debug,
+        });
+        call.succeed({ networkBytes: 0, networkAccountingComplete: true,
+          metadata: { refinement: request, requestedTimestamps: [], returnedFrameCount: 0 } });
+      }
+      const result = timesMs.length ? await this.#getFrames({
+        ...rest, request: { kind: "points", timesMs },
+        refinement: { policy: "largest-gap-midpoint-v1", startMs, endMs, budget: request.budget, basis },
+      }, signal) : {
+        kind: "exact_points" as const, continuousMotion: false,
+        frames: [], stateSummary: compactState(deriveInvestigationState(this.store, input.investigationRef)),
+      };
+      const gaps = summarizeSamplingGaps(startMs, endMs, history(), "requested");
+      return {
+        ...result,
+        samplingGaps: summarizeSamplingGaps(startMs, endMs, timesMs, "requested"),
+        refinement: {
+          policy: "largest-gap-midpoint-v1" as const, budget: request.budget, basis,
+          selectedTimesMs: timesMs,
+          exhausted: refineGapPoints(startMs, endMs, history(), 1).length === 0,
+          remainingGaps: { ...gaps, scope: "investigation" as const,
+            timestampBasis: basis === "visual" ? "nominal-and-requested" as const : "requested" as const },
+        },
+      };
+    } finally {
+      timesMs.forEach((time) => pending.delete(time));
+      if (!pending.size) this.#pendingRefinements.delete(input.investigationRef);
+    }
+  }
+
+  async #getFrames(
+    input: FramesInput,
     signal?: AbortSignal,
   ) {
     const presentation = input.presentation ?? "individual";
@@ -1856,6 +2091,10 @@ export class EvidenceService {
                 ? {}
                 : { maxTargets: input.maxTargets }),
               presentation,
+              ...(input.crop ? { crop: input.crop } : {}),
+              ...(input.rulers === undefined ? {} : { rulers: input.rulers }),
+              ...(input.diffHints === undefined ? {} : { diffHints: input.diffHints }),
+              ...(input.deduplicate === undefined ? {} : { deduplicate: input.deduplicate }),
             },
             source,
             signal,
@@ -1917,9 +2156,9 @@ export class EvidenceService {
             input.request.count,
           );
         }
-        const callParameters = presentation === "individual"
+        const callParameters = presentation === "individual" && !input.crop && !input.rulers && !input.refinement
           ? input.request
-          : { ...input.request, presentation };
+          : { ...input.request, presentation, ...(input.crop ? { crop: input.crop } : {}), ...(input.rulers ? { rulers: true } : {}), ...(input.refinement ? { refinement: input.refinement } : {}) };
         trace?.setSource(source.sourceRef, source.durationMs);
         trace?.setRequestedTimestamps(timesMs);
         const call = startAcquisition(this.store, {
@@ -1940,7 +2179,7 @@ export class EvidenceService {
           const key = deterministicRequestKey(
             source.revision,
             "frames",
-            { timesMs },
+            { timesMs, ...(input.crop ? { crop: input.crop } : {}) },
             "frame-batch",
           );
           const sharedFrames = await this.singleflight.run(
@@ -1952,15 +2191,26 @@ export class EvidenceService {
                 input.investigationRef,
                 timesMs,
                 sharedSignal,
+                input.crop,
               ),
           );
-          const frames = this.#admitFrameArtifacts(source, sharedFrames);
+          const frames = this.#admitFrameArtifacts(source, sharedFrames, input.crop);
+          const indexedFrames = frames.map((frame, index) => ({ ...frame, index }));
+          const grouping = input.deduplicate ? await this.#groupFrames(source, input.investigationRef, indexedFrames, signal) : undefined;
+          const representativeIndices = new Set(grouping?.groups.map((group) => group.representativeIndex));
+          const displayedFrames = grouping ? indexedFrames.filter((frame) => representativeIndices.has(frame.index)) : indexedFrames;
+          const deltaHints = input.diffHints ? await this.#analyzeHints(source, input.investigationRef,
+            indexedFrames, signal) : undefined;
+          const previews = await this.#framePreviews(source, input.investigationRef, displayedFrames,
+            input.rulers === true && presentation === "individual", signal);
           const panel = presentation === "panel"
-            ? await this.framePanels.get(source, frames, signal)
+            ? await this.framePanels.get(source, displayedFrames, signal, { rulers: input.rulers === true })
             : null;
-          const presentationArtifactIds = panel
-            ? [panel.artifact.artifactId]
-            : [];
+          if (grouping && panel) grouping.groups.forEach((group, index) => { group.panelIndex = index + 1; });
+          const presentationArtifactIds = [
+            ...(panel ? [panel.artifact.artifactId] : []),
+            ...[...previews.values()].map((preview) => preview.artifactId),
+          ];
           const serviceResultStarted = performance.now();
           try {
             if (input.request.kind === "points") {
@@ -1977,8 +2227,13 @@ export class EvidenceService {
                   metadata: {
                     atMs: frame.atMs,
                     role: "evidence",
-                    ...(index === 0 && panel
-                      ? { presentation: "panel", presentationArtifactIds }
+                    ...cropFields(frame.artifact),
+                    ...(index === 0 && grouping ? { deduplication: grouping } : {}),
+                    ...(input.refinement ? { refinement: input.refinement } : {}),
+                    ...(input.discovery ? { discovery: { policy: input.discovery.policy,
+                      observedPresentationTimeMs: input.discovery.candidates[index]?.observedPresentationTimeMs } } : {}),
+                    ...(index === 0 && presentationArtifactIds.length
+                      ? { presentation, presentationArtifactIds }
                       : {}),
                   },
                   presentedAt: new Date().toISOString(),
@@ -1998,8 +2253,10 @@ export class EvidenceService {
                   artifactIds: frames.map((frame) => frame.artifact.artifactId),
                   role: "evidence",
                   continuousMotion: false,
-                  ...(panel
-                    ? { presentation: "panel", presentationArtifactIds }
+                  ...(grouping ? { deduplication: grouping } : {}),
+                  ...(input.crop ? { crops: frames.map((frame) => cropFields(frame.artifact).crop) } : {}),
+                  ...(presentationArtifactIds.length
+                    ? { presentation, presentationArtifactIds }
                     : {}),
                 },
                 presentedAt: new Date().toISOString(),
@@ -2023,15 +2280,15 @@ export class EvidenceService {
                 frames: frames.length,
                 cacheHits,
                 canonicalArtifactCount: frames.length,
-                imageCount: presentation === "panel" ? 1 : frames.length,
+                imageCount: presentation === "panel" ? 1 : displayedFrames.length,
                 imageBytes: presentation === "panel"
                   ? panel!.artifact.byteSize
-                  : imageBytes,
+                  : grouping ? displayedFrames.reduce((sum, frame) => sum + frame.artifact.byteSize, 0) : imageBytes,
                 ...(panel
                   ? {
                     canvasWidth: panel.dimensions.width,
                     canvasHeight: panel.dimensions.height,
-                    cellCount: frames.length,
+                    cellCount: displayedFrames.length,
                     panelCacheHit: panel.cacheHit,
                   }
                   : {}),
@@ -2056,6 +2313,8 @@ export class EvidenceService {
                 kind,
                 continuousMotion: false,
                 samplingGaps,
+                ...(deltaHints ? { diffHints: deltaHints } : {}),
+                ...(grouping ? { deduplication: grouping } : {}),
                 frames: frames.map((frame, index) => ({
                   index,
                   atMs: frame.atMs,
@@ -2067,6 +2326,8 @@ export class EvidenceService {
                     frame.artifact.artifactId,
                   ),
                   cacheHit: frame.cacheHit,
+                  ...cropFields(frame.artifact),
+                  ...(previews.get(frame.atMs) ? { preview: previews.get(frame.atMs)! } : {}),
                 })),
                 stateSummary,
               };
@@ -2075,6 +2336,8 @@ export class EvidenceService {
               kind,
               continuousMotion: false,
               samplingGaps,
+              ...(deltaHints ? { diffHints: deltaHints } : {}),
+              ...(grouping ? { deduplication: grouping } : {}),
               presentation: "panel" as const,
               cells: frames.map((frame, index) => ({
                 index: index + 1,
@@ -2087,6 +2350,7 @@ export class EvidenceService {
                   frame.artifact.artifactId,
                 ),
                 cacheHit: frame.cacheHit,
+                ...cropFields(frame.artifact),
               })),
               panel: {
                 artifactId: panel.artifact.artifactId,
@@ -2098,10 +2362,11 @@ export class EvidenceService {
                 ),
                 width: panel.dimensions.width,
                 height: panel.dimensions.height,
-                cellCount: frames.length,
+                cellCount: displayedFrames.length,
                 cacheHit: panel.cacheHit,
                 derived: true as const,
                 canonical: false as const,
+                ...(input.rulers ? { rulers: true as const, coordinateSpace: "individual-displayed-source" as const } : {}),
               },
               stateSummary,
             };

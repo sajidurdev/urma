@@ -5,6 +5,7 @@ import type {
   SourceRef,
   TrackRef,
 } from "./ids.js";
+import type { FrameCropGeometry } from "./frame-crop.js";
 
 export type SourceKind = "local" | "remote";
 export type { RemoteIdentity } from "./ids.js";
@@ -101,6 +102,7 @@ export type ExactVisualPoint = Readonly<{
   kind: "point";
   atMs: number;
   artifactId: ArtifactId;
+  crop?: FrameCropGeometry;
 }>;
 export type SparseVisualSet = Readonly<{
   kind: "sparse";
@@ -115,6 +117,7 @@ export type OrderedVisualSet = Readonly<{
   endMs: number;
   pointsMs: readonly number[];
   artifactIds: readonly ArtifactId[];
+  crops?: readonly FrameCropGeometry[];
 }>;
 export type AudioEvidenceInterval = Readonly<{
   kind: "audio";

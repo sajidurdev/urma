@@ -24,6 +24,33 @@ export const trackRefSchema = z.string().regex(/^urma:track:[0-9a-f]{32}$/);
 const ms = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const positiveMs = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
 const interval = z.object({ startMs: ms, endMs: ms });
+const cropCoordinates = z.strictObject({
+  x: z.number().min(0).max(100), y: z.number().min(0).max(100),
+  w: z.number().positive().max(100), h: z.number().positive().max(100),
+}).refine((crop) => crop.x < 100 && crop.y < 100 && crop.x + crop.w <= 100 + 1e-9 && crop.y + crop.h <= 100 + 1e-9,
+  { message: "crop must fit within the individual displayed source frame (x+w and y+h <= 100)" });
+const cropGeometry = z.object({
+  coordinates: z.literal("displayed-source-percent"), requested: cropCoordinates,
+  sourceWidth: positiveMs, sourceHeight: positiveMs,
+  pixels: z.object({ x: ms, y: ms, width: positiveMs, height: positiveMs }),
+});
+const framePreview = z.object({
+  artifactId: artifactIdSchema, resource: z.string().max(256),
+  mimeType: z.literal("image/jpeg"), byteSize: positiveMs,
+  width: positiveMs, height: positiveMs,
+  derived: z.literal(true), canonical: z.literal(false),
+  rulers: z.literal(true), coordinateSpace: z.literal("individual-displayed-source"),
+});
+const refinement = z.object({
+  policy: z.literal("largest-gap-midpoint-v1"), budget: z.number().int().min(1).max(12),
+  basis: z.enum(["visual", "exact"]), selectedTimesMs: z.array(ms).max(12),
+  exhausted: z.boolean(),
+  remainingGaps: z.object({
+    scope: z.literal("investigation"), interval,
+    timestampBasis: z.enum(["nominal-and-requested", "requested"]),
+    largestGaps: z.array(z.object({ startMs: ms, endMs: ms, durationSeconds: z.number().positive() })).max(5),
+  }),
+});
 const gap = z.object({ startMs: ms, endMs: ms });
 const samplingGaps = z.object({
   scope: z.literal("response"),
@@ -32,6 +59,76 @@ const samplingGaps = z.object({
   largestGaps: z.array(gap.extend({
     durationSeconds: z.number().positive().max(Number.MAX_SAFE_INTEGER / 1_000),
   })).min(1).max(5),
+});
+
+const ratio = z.number().min(0).max(1);
+const analysisDimensions = z.object({
+  width: z.number().int().min(4).max(256), height: z.number().int().min(4).max(144), aspectRatioError: z.number().min(0).max(.05),
+});
+const visualDelta = z.object({
+  policy: z.literal("rgb-block-delta-v1"),
+  analysis: analysisDimensions.extend({ pixelFormat: z.literal("rgb24"), blockSize: z.literal(4),
+    pixelThreshold: z.literal(12), strongPixelThreshold: z.literal(48), connectivity: z.literal(8) }),
+  changedPixelRatio: ratio, nonzeroPixelRatio: ratio, meanAbsoluteChannelDelta: ratio,
+  unclusteredChangedPixelRatio: ratio, omittedChangedPixelRatio: ratio,
+  omittedRegionCount: z.number().int().nonnegative().max(2304),
+  regions: z.array(z.object({ x: z.number().min(0).max(100), y: z.number().min(0).max(100),
+    w: z.number().positive().max(100), h: z.number().positive().max(100), changedPixelRatio: ratio, density: ratio,
+    suggestedCrop: cropCoordinates.optional() })).max(16),
+});
+const diffHints = z.object({
+  policy: z.literal("rgb-block-delta-v1"), comparisonOrder: z.literal("returned-request-order"),
+  sourceRef: sourceRefSchema, sourceRevision: z.string().max(256),
+  semanticInterpretation: z.literal(false), continuousObservation: z.literal(false),
+  decodedFrames: z.number().int().nonnegative().max(12), cacheHits: z.number().int().nonnegative().max(12),
+  comparisons: z.array(z.object({
+    fromIndex: ms, toIndex: ms, fromRequestedAtMs: ms, toRequestedAtMs: ms,
+    fromArtifactId: artifactIdSchema, toArtifactId: artifactIdSchema,
+    status: z.enum(["analyzed", "unavailable"]), reason: z.string().max(512).optional(),
+    coordinateSpace: z.literal("individual-displayed-source"), sourceCrop: cropGeometry.optional(), delta: visualDelta.optional(),
+  })).max(11),
+});
+const deduplication = z.object({
+  policy: z.literal("conservative-frame-groups-v1"), scope: z.literal("response"),
+  observationsPreserved: z.literal(true), continuousObservation: z.literal(false),
+  inputFrameCount: z.number().int().min(0).max(12), representativeCount: z.number().int().min(0).max(12),
+  suppressedImageCount: z.number().int().min(0).max(11), comparisons: z.number().int().min(0).max(66),
+  decodedFrames: z.number().int().min(0).max(12), cacheHits: z.number().int().min(0).max(12),
+  groups: z.array(z.object({
+    representativeIndex: ms, representativeAtMs: ms, representativeArtifactId: artifactIdSchema,
+    representativeResource: z.string().max(256), panelIndex: z.number().int().min(1).max(12).nullable(),
+    members: z.array(z.object({
+      index: ms, requestedAtMs: ms, artifactId: artifactIdSchema, resource: z.string().max(256),
+      sourceRef: sourceRefSchema, sourceRevision: z.string().max(256), crop: cropGeometry.optional(),
+      relation: z.enum(["representative", "identical-artifact", "native-rgb-identical", "uniform-native-offset"]),
+      verifiedAgainstIndices: z.array(ms).max(11),
+      measurement: z.object({ width: z.number().int().min(4).max(256), height: z.number().int().min(4).max(144), blockSize: z.literal(4),
+        globalChangedPixelRatio: z.literal(0), maximumChannelDelta: z.number().int().min(0).max(2),
+        maximumBlockMeanDelta: z.number().min(0).max(2), blockMeanSpread: z.literal(0), channelOffsetSpread: z.literal(0),
+      }).nullable(),
+    })).min(1).max(12),
+  })).max(12),
+});
+const presentationMs = z.number().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const discovery = z.object({
+  policy: z.literal("visual-transition-v1"), sourceRef: sourceRefSchema, sourceRevision: z.string().max(256),
+  semanticInterpretation: z.literal(false), continuousObservation: z.literal(false),
+  coordinateSpace: z.literal("individual-displayed-source"),
+  interval, scanInterval: interval, analysis: analysisDimensions,
+  budget: z.number().int().min(1).max(12), maxFrames: z.number().int().min(4).max(240), maxScanMs: z.number().int().min(1).max(30000),
+  decodedAnalysisFrames: z.number().int().nonnegative().max(240), fineFrameCount: z.number().int().nonnegative().max(240),
+  keyframeAssisted: z.boolean(), coarsePresentationTimesMs: z.array(presentationMs).max(24),
+  presentationTimesMs: z.array(presentationMs).max(240), candidateCount: z.number().int().nonnegative().max(239),
+  omittedCandidateCount: z.number().int().nonnegative().max(239),
+  candidates: z.array(z.object({ requestedAtMs: ms, observedPresentationTimeMs: presentationMs,
+    comparedFromPresentationTimeMs: presentationMs, sceneScore: z.number().min(0).max(100), delta: visualDelta })).max(12),
+  frameLimitReached: z.boolean(), rangeLimited: z.boolean(),
+  scanSamplingGaps: samplingGaps.extend({ timestampBasis: z.literal("decoded-presentation-floor-ms") }),
+  provenance: z.object({ method: z.literal("ffmpeg-rgb24-scdet"), transportArtifactId: artifactIdSchema.nullable(),
+    ffmpegVersion: z.string().max(512).nullable(),
+    timeline: z.literal("container-origin-relative"), ffmpegSceneThreshold: z.number().positive().max(100),
+    minChangedRatio: z.number().positive().max(1), decoderThreads: z.literal(1), maxInputPixels: z.literal(8388608),
+    maxWallMs: z.number().int().positive().max(15000), selectedFramePtsAvailable: z.literal(false) }),
 });
 
 const overviewProvenance = z.object({
@@ -135,6 +232,7 @@ const transcriptTrack = z.object({
   kind: z.enum(["manual", "automatic", "sidecar", "unknown"]),
   displayName: z.string().max(200).nullable(),
   providerTrackId: z.string().max(256).nullable(),
+  embedded: z.object({ streamIndex: ms, codec: z.enum(["subrip", "webvtt", "mov_text"]), default: z.boolean() }).optional(),
 });
 
 export const inspectOutput = z.object({
@@ -305,6 +403,7 @@ export const overviewInput = z.object({
   investigationRef: investigationRefSchema,
   startMs: ms.optional(),
   endMs: ms.optional(),
+  rulers: z.boolean().optional(),
 });
 
 const overviewCell = z.object({
@@ -345,6 +444,7 @@ export const overviewOutput = z.object({
     resource: z.string().max(256),
   }),
   cacheHit: z.boolean(),
+  rulers: z.literal(true).optional(),
   stateSummary: stateSummarySchema,
 });
 
@@ -388,11 +488,26 @@ const frameRequest = z.discriminatedUnion("kind", [
   pointsRequest,
   burstRequest,
   cadenceRequest,
+  z.object({
+    kind: z.literal("refine"), startMs: ms.optional(), endMs: ms.optional(),
+    budget: z.number().int().min(1).max(12), basis: z.enum(["visual", "exact"]).optional(),
+  }).refine((request) => request.startMs === undefined || request.endMs === undefined || request.endMs > request.startMs,
+    { message: "Refinement range requires endMs > startMs" }),
+  z.object({ kind: z.literal("discover"), startMs: ms.optional(), endMs: ms.optional(),
+    budget: z.number().int().min(1).max(12), maxFrames: z.number().int().min(4).max(240).optional(),
+    maxScanMs: z.number().int().min(1).max(30000).optional(), sceneThreshold: z.number().positive().max(100).optional(),
+    minChangedRatio: z.number().positive().max(1).optional(), keyframeAssist: z.boolean().optional(),
+  }).refine((request) => request.startMs === undefined || request.endMs === undefined || request.endMs > request.startMs,
+    { message: "Discovery range requires endMs > startMs" }),
 ]);
 
 const framesBaseInput = z.looseObject({
   investigationRef: investigationRefSchema,
   presentation: z.enum(["individual", "panel"]).optional(),
+  crop: cropCoordinates.optional(),
+  rulers: z.boolean().optional(),
+  diffHints: z.boolean().optional(),
+  deduplicate: z.boolean().optional(),
   pageSize: z.number().int().min(1).max(12).optional(),
   maxTargets: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
 });
@@ -443,12 +558,18 @@ const canonicalFrame = z.object({
   byteSize: z.number().int().positive(),
   resource: z.string().max(256),
   cacheHit: z.boolean(),
+  crop: cropGeometry.optional(),
+  preview: framePreview.optional(),
 });
 
 const individualFramesOutput = z.object({
   kind: z.enum(["exact_points", "ordered_points"]),
   continuousMotion: z.literal(false),
   samplingGaps,
+  refinement: refinement.optional(),
+  discovery: discovery.optional(),
+  diffHints: diffHints.optional(),
+  deduplication: deduplication.optional(),
   frames: z
     .array(
       z.object({
@@ -466,6 +587,10 @@ const panelFramesOutput = z.object({
   kind: z.enum(["exact_points", "ordered_points"]),
   continuousMotion: z.literal(false),
   samplingGaps,
+  refinement: refinement.optional(),
+  discovery: discovery.optional(),
+  diffHints: diffHints.optional(),
+  deduplication: deduplication.optional(),
   presentation: z.literal("panel"),
   cells: z
     .array(
@@ -482,8 +607,10 @@ const panelFramesOutput = z.object({
     mimeType: z.literal("image/jpeg"),
     byteSize: z.number().int().positive(),
     resource: z.string().max(256),
-    width: z.number().int().positive().max(1280),
-    height: z.number().int().positive().max(636),
+    width: z.number().int().positive().max(1600),
+    height: z.number().int().positive().max(876),
+    rulers: z.literal(true).optional(),
+    coordinateSpace: z.literal("individual-displayed-source").optional(),
     cellCount: z.number().int().min(1).max(12),
     cacheHit: z.boolean(),
     derived: z.literal(true),
@@ -536,6 +663,8 @@ const scheduleFields = z.object({
   continuous: z.literal(false),
   observations: z.literal("discrete-points"),
   samplingGaps,
+  diffHints: diffHints.optional(),
+  deduplication: deduplication.optional(),
   schedule: z.object({
     kind: z.literal("fixed-cadence"),
     startMs: ms,
@@ -588,8 +717,10 @@ const schedulePanel = z.object({
   mimeType: z.literal("image/jpeg"),
   byteSize: z.number().int().positive(),
   resource: z.string().max(256),
-  width: z.number().int().positive().max(1280),
-  height: z.number().int().positive().max(636),
+  width: z.number().int().positive().max(1600),
+  height: z.number().int().positive().max(876),
+  rulers: z.literal(true).optional(),
+  coordinateSpace: z.literal("individual-displayed-source").optional(),
   cellCount: z.number().int().min(1).max(12),
   cacheHit: z.boolean(),
   derived: z.literal(true),
@@ -615,6 +746,10 @@ export const framesOutput = z.union([
   panelFramesOutput,
   scheduleIndividualOutput,
   schedulePanelOutput,
+  individualFramesOutput.extend({
+    frames: z.array(z.never()).length(0), refinement,
+  }),
+  individualFramesOutput.extend({ frames: z.array(z.never()).length(0), discovery }),
 ]);
 
 const modelIdentity = {
@@ -741,6 +876,8 @@ const schedulePanelMcp = schedulePanel.omit({
 });
 export const framesMcpOutput = z.union([
   individualFramesMcpOutput,
+  individualFramesMcpOutput.extend({ frames: z.array(z.never()).length(0), refinement }),
+  individualFramesMcpOutput.extend({ frames: z.array(z.never()).length(0), discovery }),
   panelFramesMcpOutput,
   scheduleIndividualOutput
     .omit({ stateSummary: true, schedule: true, slots: true })

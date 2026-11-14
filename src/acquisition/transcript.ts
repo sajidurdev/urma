@@ -4,7 +4,7 @@ import type { UrmaConfig } from "../config.js";
 import { UrmaError } from "../core/errors.js";
 import { deterministicRequestKey } from "../core/request-key.js";
 import { artifactIdFromSha256, parseTrackRef, sha256 } from "../core/ids.js";
-import type { InvestigationRef, TrackRef } from "../core/ids.js";
+import type { ArtifactId, InvestigationRef, TrackRef } from "../core/ids.js";
 import type { TranscriptKind } from "../core/model.js";
 import { BlobStore } from "../store/blob-store.js";
 import type {
@@ -18,7 +18,8 @@ import { ensureRemoteProxy, type RemoteOperationContext } from "../remote/operat
 import { collectBinaryVersions } from "../subprocess/versions.js";
 import { URMA_VERSION } from "../version.js";
 import type { CaptionTrackSummary, ResolvedSource } from "../sources/types.js";
-import { parseLocalSnapshot } from "../sources/local.js";
+import { parseLocalSnapshot, verifyPinnedLocalVideo } from "../sources/local.js";
+import { Ffmpeg } from "../subprocess/ffmpeg.js";
 import { startAcquisition } from "./records.js";
 import {
   assertRemoteDirectoryWithinBudget,
@@ -148,7 +149,9 @@ export function chooseTrack(
         : a.trackRef > b.trackRef
         ? 1
         : 0;
-      return kind(a) - kind(b) || language(a) - language(b) || lexical;
+      const defaultOrder = a.embedded && b.embedded ? Number(b.embedded.default) - Number(a.embedded.default) : 0;
+      const streamOrder = a.embedded && b.embedded ? a.embedded.streamIndex - b.embedded.streamIndex : 0;
+      return kind(a) - kind(b) || defaultOrder || language(a) - language(b) || streamOrder || lexical;
     })[0] ?? null
   );
 }
@@ -185,7 +188,7 @@ export function selectTrack(
   if (!selected) {
     throw new UrmaError(
       "CAPTIONS_UNAVAILABLE",
-      "This source has no supported native or allowed local sidecar caption track; Urma does not perform speech-to-text",
+      "This source has no supported platform, sidecar, or embedded caption track; Urma does not perform speech-to-text",
     );
   }
   return selected;
@@ -243,7 +246,7 @@ export class TranscriptAcquirer {
     if (storedPin === undefined && candidates.length > 1) {
       throw captionSnapshotConflict(selected.trackRef, "caption-artifacts-conflict");
     }
-    const localPin = source.kind === "local"
+    const localPin = source.kind === "local" && selected.kind === "sidecar"
       ? parseLocalSnapshot(source.safeMetadata.localSnapshot)?.caption?.artifactId
       : undefined;
     const expectedId = storedPin ?? localPin ?? candidates[0];
@@ -312,13 +315,14 @@ export class TranscriptAcquirer {
         }
       }
     }
-    if (selected.kind === "unknown") {
+    if (selected.kind === "unknown" && !selected.embedded) {
       throw new UrmaError(
         "CAPTIONS_UNAVAILABLE",
         "The selected caption track has an unknown origin and cannot be acquired safely; choose a manual, automatic, or sidecar track",
       );
     }
-    if (selected.kind !== "sidecar") {
+    const local = selected.kind === "sidecar" || selected.embedded !== undefined;
+    if (!local) {
       await ensureRemoteProxy(this.remoteContext);
     }
     const requestKey = deterministicRequestKey(
@@ -337,14 +341,21 @@ export class TranscriptAcquirer {
       investigationRef,
       operation: "acquire-transcript",
       requestKey,
-      method: selected.kind === "sidecar" ? "local-file" : "yt-dlp-caption",
+      method: selected.embedded ? "ffmpeg-decode" : local ? "local-file" : "yt-dlp-caption",
       debug: this.config.debug,
     });
     try {
       let body: string;
       let extension: string;
       let bytes: Buffer;
-      if (selected.kind === "sidecar") {
+      let inputArtifactId: ArtifactId | undefined;
+      if (selected.embedded) {
+        const snapshot = source.kind === "local" ? parseLocalSnapshot(source.safeMetadata.localSnapshot) : null;
+        if (!snapshot) throw new UrmaError("CAPTIONS_UNAVAILABLE", "Embedded subtitles require a pinned local video; inspect the local file again");
+        const video = await verifyPinnedLocalVideo(source.safeMetadata.localSnapshot, this.blobs);
+        bytes = await new Ffmpeg(this.config).textSubtitles(video, selected.embedded.streamIndex, signal);
+        body = bytes.toString("utf8"); extension = ".vtt"; inputArtifactId = snapshot.video.artifactId;
+      } else if (selected.kind === "sidecar") {
         const snapshot = source.kind === "local"
           ? parseLocalSnapshot(source.safeMetadata.localSnapshot)
           : null;
@@ -451,7 +462,7 @@ export class TranscriptAcquirer {
       const acquiredAt = new Date().toISOString();
       const versions = await collectBinaryVersions(
         this.config,
-        selected.kind === "sidecar" ? [] : ["ytdlp"],
+        selected.embedded ? ["ffmpeg"] : local ? [] : ["ytdlp"],
         signal,
       );
       const track: StoredTrack = {
@@ -468,6 +479,7 @@ export class TranscriptAcquirer {
           trackRef: selected.trackRef,
           displayName: selected.displayName,
           captionArtifactId: blob.artifactId,
+          ...(selected.embedded ? { embedded: selected.embedded, inputArtifactId } : {}),
         },
       };
       this.store.putTranscript(track, parsed);
@@ -498,13 +510,14 @@ export class TranscriptAcquirer {
           version: "transcript-parser",
           urmaVersion: URMA_VERSION,
           ...versions,
+          ...(selected.embedded ? { embedded: selected.embedded, inputArtifactId, timeline: "container-origin-relative" } : {}),
         },
         createdAt: acquiredAt,
       };
       this.store.putArtifact(artifact, { requestKey, operation: "transcript" });
       acquisition.succeed({
-        networkBytes: selected.kind === "sidecar" ? 0 : null,
-        networkAccountingComplete: selected.kind === "sidecar",
+        networkBytes: local ? 0 : null,
+        networkAccountingComplete: local,
         metadata: {
           artifactId: artifact.artifactId,
           trackRef: selected.trackRef,

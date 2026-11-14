@@ -3,179 +3,126 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/sajidurdev/urma/main/assets/urma-banner.png" alt="Urma" width="100%" />
   <br /><br />
-  <strong>Retrieve video captions and frames through MCP.</strong>
+  <strong>Let your AI agent look inside videos.</strong>
   <br /><br />
-  <a href="#try-urma">Try Urma</a>
-  ·
-  <a href="#install-and-connect-a-host">Install</a>
-  ·
-  <a href="#tools">Tools</a>
-  ·
-  <a href="#configuration">Configuration</a>
-  ·
-  <a href="#documentation">Documentation</a>
+  <a href="#example">Example</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#supported-sources-and-limitations">Supported sources</a>
   <br /><br />
-  <sub><code>urma-mcp</code> · MCP stdio · Node.js 22.16+ (22.x), 24.x, 26.x</sub>
+  <sub><code>urma-mcp</code> · Model Context Protocol</sub>
 </div>
 
-<br />
+Urma is a local **Model Context Protocol (MCP) server for video inspection**.
+It gives AI agents captions and timestamped images from public video URLs and
+local files. Your agent interprets the evidence and answers your question.
 
-Urma gives MCP clients access to captions and frames from public video URLs
-and local video files. Search captions for a topic, browse a visual overview,
-or retrieve frames at specific timestamps.
+- Find words or phrases in existing captions and read the surrounding context.
+- Browse visual overviews or retrieve frames at specific times and intervals.
+- Narrow gaps in sampled coverage, find visual changes, and inspect cropped regions.
+- Compare frames with change hints, coordinate rulers, and optional image grouping.
 
-Urma runs locally and keeps its cache on your filesystem. Your MCP client
-starts the server over stdio and receives the requested text and images.
-Remote videos require network access.
+Urma exposes five tools. See the [tool reference](https://github.com/sajidurdev/urma/blob/main/docs/TOOLS.md)
+for their parameters, results, and evidence guarantees.
 
-## Try Urma
+## Example
 
-1. Install with `npx -y urma-mcp@latest setup`.
-2. [Connect your MCP client](#register-a-generic-json-host) and restart it.
-3. Give the client a video URL and a question about the video.
+Give your connected agent a public software walkthrough URL, then ask:
 
-For example, replace `<video URL>` in this prompt with a public product demo:
+> Find where the presenter discusses dark mode. Is the setting enabled
+> on screen afterward? Check the captions and frames, and include timestamps.
 
-> In this demo, where does the presenter discuss dark mode, and is the toggle
-> enabled on screen? `<video URL>`
+For a video with captions, the agent can open it with `inspect_video`, locate
+“dark mode” with `search_transcript`, and compare nearby images with `get_frames`.
+The answer can distinguish what the presenter said from what was visible.
 
-For a local file, [allow its directory](#local-videos) first. See
-[supported sources](https://github.com/sajidurdev/urma/blob/main/docs/PRODUCT_SCOPE.md#source-admission) for provider and
-format limitations.
-
-## Install and connect a host
-
-### Requirements
-
-- Native Node.js `>=22.16.0 <23`, `>=24.0.0 <25`, or `>=26.0.0 <27`.
-- Windows 10 22H2 or later (x64/arm64), macOS x64/arm64, or Linux x64/arm64 with glibc.
-- A user-owned local directory with at least 1 GiB free for the installation.
-
-Setup installs the required versions of FFmpeg, ffprobe, and yt-dlp. You only
-need to install Node.js yourself.
-
-### Install the runtime
-
-```sh
-npx -y urma-mcp@latest setup
+```mermaid
+flowchart TD
+    accTitle: Urma video question workflow
+    accDescr: An AI agent retrieves video evidence from Urma, interprets it, and answers the user.
+    User[You] --> Agent[AI agent]
+    Agent --> Urma
+    Urma --> Evidence[Video evidence]
+    Evidence --> Review[AI agent]
+    Review --> Answer[Answer]
 ```
 
-Setup downloads and verifies the native tools, tests the installed server, and
-prints the paths needed by your MCP client. Updates are installed separately
-from the current runtime; a failed update leaves the current installation
-selected.
+## Quick start
 
-For a repeatable installation, pin the package version:
+You need:
 
-```sh
-npx -y urma-mcp@0.2.0 setup
-```
+- Native Node.js **22.16+ (22.x), 24.x, or 26.x**, with npm/npx.
+- Windows 10 22H2 or later, macOS, or Linux with glibc; x64 or arm64.
+- A user-owned local installation directory with at least **1 GiB free**.
+- An MCP client that starts local servers over standard input/output (stdio).
+  Visual questions also require a client and model that can read tool images.
 
-Urma uses these default data directories:
+1. In your terminal, install Urma. You don't need to clone the repository.
 
-| Platform | Directory |
-| --- | --- |
-| Windows | `%LOCALAPPDATA%\Urma` |
-| macOS | `~/Library/Application Support/Urma` |
-| Linux | `${XDG_DATA_HOME:-~/.local/share}/urma` |
+   ```sh
+   npx -y urma-mcp@latest setup
+   ```
 
-To choose another directory, pass `--data-dir PATH` to setup or set
-`URMA_DATA_DIR`. The data directory must be on a user-owned local filesystem;
-network and UNC locations are unsupported.
+   Setup installs and verifies Urma, FFmpeg, ffprobe, and yt-dlp. It prints the
+   **Node executable** and **launcher** paths needed by your client.
 
-### Register a generic JSON host
+2. In your MCP client's configuration, add a local server. For clients using
+   `mcpServers` JSON, merge this entry into the existing configuration:
 
-For clients that use an `mcpServers` JSON configuration, setup can write the
-entry for you:
+   ```json
+   {
+     "mcpServers": {
+       "urma": {
+         "command": "/absolute/path/to/node",
+         "args": ["/absolute/path/to/Urma/launcher-v1.mjs"],
+         "env": {
+           "URMA_DATA_DIR": "/absolute/path/to/Urma"
+         }
+       }
+     }
+   }
+   ```
+
+   Replace `command` and the launcher argument with the paths printed by setup.
+   Set `URMA_DATA_DIR` to the folder containing the launcher. On Windows, escape
+   backslashes in JSON, for example `C:\\Users\\you\\AppData\\Local\\Urma`.
+   For other configuration formats, enter the same command, argument, and
+   environment variable in a local stdio server entry. Your client's documentation
+   identifies its configuration location.
+
+3. Save the configuration and restart your client. Check that it lists
+   `inspect_video`, `search_transcript`, `read_transcript`, `get_overview`, and `get_frames`.
+4. Give your agent a public video URL and a question, such as the [example](#example).
+   For a local file, [allow its folder](#local-videos) first.
+
+`@latest` selects the newest published npm release. See
+[GitHub Releases](https://github.com/sajidurdev/urma/releases) and
+[npm versions](https://www.npmjs.com/package/urma-mcp?activeTab=versions) for
+published versions.
+
+### Optional JSON registration
+
+Setup can write the client entry instead of configuring it manually. Replace
+this placeholder with the absolute path to your client's actual JSON file:
 
 ```sh
 npx -y urma-mcp@latest setup --client generic --config "/absolute/path/to/mcp.json"
 ```
 
-The configuration path must be absolute. Setup preserves unrelated entries.
-If an `urma` entry already exists, setup updates `command`, `args`, and
-`env.URMA_DATA_DIR`, leaving its other settings in place.
-
-To configure a client manually, use the absolute paths printed by setup:
-
-```json
-{
-  "mcpServers": {
-    "urma": {
-      "command": "/absolute/path/to/node",
-      "args": ["/absolute/path/to/Urma/launcher-v1.mjs"],
-      "env": {
-        "URMA_DATA_DIR": "/absolute/path/to/Urma"
-      }
-    }
-  }
-}
-```
-
-On Windows, escape backslashes in JSON, for example `C:\\Users\\you\\AppData\\Local\\Urma`.
-For clients with a different configuration format, use the same Node
-executable, launcher, and environment settings in a stdio server entry.
-
-Restart the client after saving the configuration. It should list the five
-tools below. If registration fails, setup reports that separately from the
-runtime installation; you can still configure the installed server manually.
-
-## Tools
-
-| Tool | Use it to |
-| --- | --- |
-| `inspect_video` | Open a video and list its duration, metadata, and caption tracks. |
-| `search_transcript` | Find literal phrases or terms in a caption track. |
-| `read_transcript` | Read timestamped captions for a time range. |
-| `get_overview` | Browse up to 12 visual samples from a video or time range. |
-| `get_frames` | Retrieve JPEG frames at chosen times, in a burst, or at a fixed interval. |
-
-Start with `inspect_video`. For an allowed local file, its arguments are:
-
-```json
-{ "source": "/absolute/path/to/demo.mp4" }
-```
-
-Use the returned `investigationRef` for subsequent calls. For example, these
-`search_transcript` arguments find mentions of dark mode:
-
-```json
-{
-  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
-  "query": "dark mode"
-}
-```
-
-Replace the example reference with the one from inspection. If a match occurs
-near 10 seconds, these `get_frames` arguments request a panel at 10 and 11
-seconds from a video longer than 11 seconds:
-
-```json
-{
-  "investigationRef": "urma:investigation:0123456789abcdef0123456789abcdef",
-  "request": { "kind": "points", "timesMs": [10000, 11000] },
-  "presentation": "panel"
-}
-```
-
-All times are integer milliseconds from the start of the video. Caption
-search uses source-provided captions; Urma does not transcribe audio. Overviews
-and frame requests show selected moments, so brief events between samples can
-be missed.
-
-The [tool reference](https://github.com/sajidurdev/urma/blob/main/docs/EVIDENCE_MODEL.md) covers all arguments, pagination,
-result fields, and timing guarantees.
+Setup preserves unrelated entries and updates Urma's command, arguments, and
+`env.URMA_DATA_DIR`. Restart the client afterward. A registration failure is
+reported separately from installation; a healthy runtime can still be connected
+manually.
 
 ## Configuration
 
-Set environment variables in the client's Urma `env` entry and restart the
-client after changing them.
+Set environment variables in your client's Urma `env` entry, then restart the client.
 
 ### Local videos
 
-Local file access is disabled by default. Set `URMA_LOCAL_ROOTS` to the
-directories that Urma may read. Use absolute paths, separated by `;` on
-Windows or `:` on macOS/Linux. For example:
+Local access is disabled by default. Add `URMA_LOCAL_ROOTS` with the absolute
+paths of allowed folders. Separate multiple paths with `;` on Windows or `:`
+on macOS/Linux. Merge this macOS/Linux example into `env`, keeping `URMA_DATA_DIR`:
 
 ```json
 {
@@ -183,124 +130,127 @@ Windows or `:` on macOS/Linux. For example:
 }
 ```
 
-This example is an `env` fragment for macOS/Linux. On Windows, a single root
-might be `"URMA_LOCAL_ROOTS": "C:\\Users\\you\\Videos"`.
+On Windows, a single folder could be `"URMA_LOCAL_ROOTS": "C:\\Users\\you\\Videos"`.
+Urma checks resolved symlink and junction targets as well as the supplied path.
 
-Urma looks for captions beside the video: `demo.vtt` first, then `demo.srt` for
-`demo.mp4`. Sidecars must also be inside an allowed root. Symlinks and junctions
-are checked against their resolved locations.
+For `demo.mp4`, Urma looks beside the video for `demo.vtt`, then `demo.srt`.
+These caption files must also be inside an allowed folder. Embedded SubRip,
+WebVTT, and `mov_text` text subtitles are supported; bitmap subtitles are not.
+A caption file takes priority over embedded tracks unless the agent selects a track.
 
-| Variable | Purpose |
-| --- | --- |
-| `URMA_DATA_DIR` | Installation, database, and cache directory. |
-| `URMA_LOCAL_ROOTS` | Directories allowed for local videos and caption sidecars. |
-| `URMA_ALLOW_UNC` | Set to `1` or `true` to allow UNC video inputs under an allowed root. This does not allow a UNC data directory. |
-| `URMA_DEBUG` | Set to `1` or `true` to write diagnostic logs to stderr. |
-| `URMA_DEBUG_FILE` | Append diagnostic logs to a JSONL file when debugging is enabled. |
+### Storage and optional settings
+
+Default installation and cache directories are:
+
+- Windows: `%LOCALAPPDATA%\Urma`.
+- macOS: `~/Library/Application Support/Urma`.
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/urma`.
+
+To choose another directory, set `URMA_DATA_DIR` or run:
+
+```sh
+npx -y urma-mcp@latest setup --data-dir "/absolute/path/to/Urma"
+```
+
+Use the same directory in your MCP configuration. It must be
+user-owned and local; network and UNC installation directories are unsupported.
+
+- `URMA_ALLOW_UNC=1` or `true` permits UNC video inputs within allowed roots.
+  It does not permit a UNC installation directory.
+- `URMA_DEBUG=1` or `true` enables diagnostics on stderr. `URMA_DEBUG_FILE` also
+  appends JSONL logs to a file when debugging is enabled. Review logs before sharing.
+- `URMA_FONT` optionally selects a font file for image labels and coordinate rulers.
 
 ### Acquisition limits
 
-These limits bound downloads and frame schedules. Override them with positive
-integer values; byte limits use bytes and the timeout uses milliseconds.
+Override these settings with positive integers. Byte settings use bytes;
+`URMA_MAX_REMOTE_ACQUISITION_WALL_MS` uses milliseconds.
 
 | Variable | Default |
 | --- | ---: |
 | `URMA_MAX_TARGETED_MEDIA_BYTES` | 67,108,864 (64 MiB) |
-| `URMA_MAX_NAVIGATION_COPY_BYTES` | 268,435,456 (256 MiB); also used for timeline validation |
+| `URMA_MAX_NAVIGATION_COPY_BYTES` | 268,435,456 (256 MiB); also bounds timeline validation |
 | `URMA_MAX_REUSABLE_EVIDENCE_MEDIA_BYTES` | 536,870,912 (512 MiB) |
 | `URMA_MAX_REMOTE_ACQUISITION_WALL_MS` | 180,000 (3 minutes) |
-| `URMA_MAX_FRAME_SCHEDULE_PAGE_TARGETS` | 12; cannot be increased above 12 |
+| `URMA_MAX_FRAME_SCHEDULE_PAGE_TARGETS` | 12; cannot exceed 12 |
 | `URMA_MAX_FRAME_SCHEDULE_TARGETS` | 120 |
 
-Inline image responses have a fixed 8 MiB ceiling, and resource reads have a
-fixed 32 MiB ceiling. Tool-specific caption and sampling limits are listed in
-the [tool reference](https://github.com/sajidurdev/urma/blob/main/docs/EVIDENCE_MODEL.md).
+Inline images have a fixed 8 MiB response limit; resource reads have a fixed
+32 MiB limit. See [tool-specific limits](https://github.com/sajidurdev/urma/blob/main/docs/TOOLS.md#limits-and-errors)
+for caption, sampling, and analysis bounds.
 
-## CLI and maintenance
+## Supported sources and limitations
 
-Run setup again to update Urma. Restart the MCP client to use the new
-installation; an already running server keeps its current version.
+- **Public videos:** one finite video at an HTTP(S) URL, resolved through yt-dlp.
+  Media can be a progressive file, finite HLS playlist, or static DASH timeline.
+  URLs must use the default port and contain no embedded credentials.
+- **Provider compatibility:** fixtures cover X / Twitter, Facebook Reels,
+  Instagram Reels, Loom, Streamable, and Mux HLS. These are individual examples;
+  access and delivery formats can change. Other sources, including YouTube,
+  are best effort. yt-dlp support alone does not guarantee Urma compatibility.
+- **Local videos:** regular files within explicitly allowed folders, with
+  matching caption files or supported embedded text subtitles.
+- **Unsupported sources:** live or upcoming streams, playlists of multiple
+  videos, private or login-required videos, paid access, and DRM-protected media.
+- **Existing captions only:** no built-in audio transcription, caption
+  translation, or semantic transcript search. Literal search covers one selected
+  caption track; a missing match does not prove a topic is absent from the video.
+- **Selected moments:** samples can miss brief events. Visual change detection
+  and grouping do not interpret meaning or establish continuous coverage.
+  Urma does not run OCR, object recognition, or model-based video analysis.
 
-To see the version selected by npm's `latest` tag:
+Urma runs locally and stores its cache on your filesystem. Remote videos need
+network access. Your MCP client decides whether returned text and images are
+sent to a model service. Urma is intended for one trusted local user; see the
+[security policy](https://github.com/sajidurdev/urma/blob/main/.github/SECURITY.md).
 
-```sh
-npx -y urma-mcp@latest --version
-```
+## Updates and troubleshooting
 
-To check the installed version or diagnose a problem, use the Node and launcher
-paths printed by setup. If setup used a custom data directory, set
-`URMA_DATA_DIR` to that directory before running launcher commands:
+Run setup again to update Urma, then restart your MCP client. Running servers
+keep their selected version; a failed update leaves the previous installation
+selected. Normal server startup does not download tools or check for updates.
+
+If the client does not list Urma, check its configuration location and the absolute
+Node and launcher paths. Use the paths printed by setup to check the installed
+version or run `doctor`. For a custom data directory, set `URMA_DATA_DIR` first,
+and use the same environment settings as your MCP client.
+
+In a macOS or Linux shell, replace the paths and run:
 
 ```sh
 "/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" --version
 "/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" doctor
 ```
 
-In PowerShell, prefix a quoted executable path with `&`:
+In PowerShell, use `&` before a quoted executable path:
 
 ```powershell
+& "C:\path\to\node.exe" "C:\path\to\Urma\launcher-v1.mjs" --version
 & "C:\path\to\node.exe" "C:\path\to\Urma\launcher-v1.mjs" doctor
 ```
 
-Doctor checks the runtime, native tools, storage, local roots, and configured
-limits without changing the installation. Its report goes to stderr. Exit
-status `0` means no check failed, although warnings may remain; `1` means at
-least one check failed. Use the same `URMA_DATA_DIR`, `URMA_LOCAL_ROOTS`, and
-other Urma settings as your MCP client.
+Doctor reports checks on stderr. Exit status `0` means no check failed, although
+warnings may remain; `1` means at least one failed. To recover after an update,
+replace `doctor` with `rollback` to select the retained previous installation,
+or `recover` to restore the backed-up installation selection. Integrity and
+compatibility checks still apply. Run only the command you need and restart
+the client afterward.
 
-If an update causes problems, the launcher provides two recovery commands:
-
-```sh
-"/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" rollback
-"/absolute/path/to/node" "/absolute/path/to/Urma/launcher-v1.mjs" recover
-```
-
-`rollback` selects the retained previous installation after integrity and
-state-compatibility checks. `recover` restores the installation selection
-saved in `ACTIVE.backup.json`. Restart the MCP client afterward.
-
-## Reporting problems
-
-Use the [bug-report template](https://github.com/sajidurdev/urma/issues/new?template=bug-report.md).
-Include reproduction steps, your OS and architecture, Node.js and MCP client
-versions, and the installed Urma version. For source-specific problems,
-include a public URL or describe a local file that reproduces the failure.
-
-Include doctor output if setup completed, or the setup error if it did not.
-Remove credentials, private URLs, and personal paths before posting logs.
-
-## Security
-
-Urma restricts local files to configured roots, validates remote destinations,
-and verifies its managed native tools. It is intended for one trusted local
-user. See [Security](https://github.com/sajidurdev/urma/blob/main/docs/SECURITY.md) for the controls, assumptions, and MCP
-integration considerations.
-
-## Development
-
-From the repository root, using Node.js 24 and the pnpm version in
-`package.json`:
-
-```sh
-pnpm install --frozen-lockfile
-pnpm check
-```
-
-See [Contributing](https://github.com/sajidurdev/urma/blob/main/docs/CONTRIBUTING.md) for native-tool prerequisites, code
-structure, and validation commands.
+For ordinary bugs, use the [bug-report template](https://github.com/sajidurdev/urma/issues/new?template=bug-report.md).
+Include your OS, Node.js, MCP client and installed Urma versions, reproduction
+steps, and sanitized doctor output or setup error. Report vulnerabilities
+[privately](https://github.com/sajidurdev/urma/blob/main/.github/SECURITY.md#report-a-vulnerability).
 
 ## Documentation
 
-- [Product scope](https://github.com/sajidurdev/urma/blob/main/docs/PRODUCT_SCOPE.md): supported sources and limitations.
-- [Tool reference](https://github.com/sajidurdev/urma/blob/main/docs/EVIDENCE_MODEL.md): arguments, results, and examples.
-- [Architecture](https://github.com/sajidurdev/urma/blob/main/docs/ARCHITECTURE.md): source snapshots, acquisition, caching, and installation design.
-- [Security](https://github.com/sajidurdev/urma/blob/main/docs/SECURITY.md): filesystem, network, subprocess, and resource boundaries.
-- [Contributing](https://github.com/sajidurdev/urma/blob/main/docs/CONTRIBUTING.md): development setup and contribution guidelines.
+- [Tool reference](https://github.com/sajidurdev/urma/blob/main/docs/TOOLS.md): parameters, results, limits, and evidence semantics.
+- [Contributing](https://github.com/sajidurdev/urma/blob/main/.github/CONTRIBUTING.md): development, testing, and engineering constraints.
+- [Security](https://github.com/sajidurdev/urma/blob/main/.github/SECURITY.md): reporting, trust boundaries, and limitations.
+- [GitHub Releases](https://github.com/sajidurdev/urma/releases): published release notes and assets.
 
 ## License
 
 Urma is licensed under [Apache License 2.0](LICENSE). Dependencies and downloaded
-native tools retain their own licenses. The installed runtime's `licenses/`
-directory contains native component licenses and upstream references; preserve
-their notices when redistributing those tools. Urma's license does not grant
+native tools retain their own licenses; preserve the installed runtime's
+`licenses/` notices when redistributing them. Urma's license does not grant
 rights to retrieved videos or captions.

@@ -331,6 +331,7 @@ export function buildMcpServer(
             investigationRef: parseInvestigationRef(args.investigationRef),
             ...(args.startMs === undefined ? {} : { startMs: args.startMs }),
             ...(args.endMs === undefined ? {} : { endMs: args.endMs }),
+            ...(args.rulers === undefined ? {} : { rulers: args.rulers }),
           },
           ctx.mcpReq.signal,
         );
@@ -377,13 +378,13 @@ export function buildMcpServer(
     {
       title: "Get exact or ordered sparse frames",
       description:
-        "Get deterministic frame evidence at explicit points, a burst, or fixed cadence. Batch known targets; cadence is discrete, not continuous.",
+        "Get frame evidence at points, a burst, fixed cadence, refine gaps, or discover visual transitions. Optional diffHints report RGB change regions; deduplicate groups representative images while preserving every observation and frame resource. Crop/rulers use individual source coordinates. Samples are discrete, never continuous.",
       inputSchema: framesInput,
       outputSchema: framesMcpOutput,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
-        idempotentHint: true,
+        idempotentHint: false,
       },
     },
     async (args, ctx) =>
@@ -411,11 +412,17 @@ export function buildMcpServer(
                 ...(args.presentation
                   ? { presentation: args.presentation }
                   : {}),
+                ...(args.crop === undefined ? {} : { crop: args.crop }),
+                ...(args.rulers === undefined ? {} : { rulers: args.rulers }),
+                ...(args.diffHints === undefined ? {} : { diffHints: args.diffHints }),
+                ...(args.deduplicate === undefined ? {} : { deduplicate: args.deduplicate }),
               },
               ctx.mcpReq.signal,
             );
             const mcpResultStarted = performance.now();
             try {
+              const representatives = "deduplication" in output && output.deduplication
+                ? new Set(output.deduplication.groups.map((group) => group.representativeIndex)) : null;
               if ("schedule" in output) {
                 const successful = output.slots.filter(
                   (slot) => slot.status === "success",
@@ -425,12 +432,14 @@ export function buildMcpServer(
                   (typeof successful)[number]
                 >();
                 for (const slot of successful) {
-                  if (!uniqueArtifacts.has(slot.artifactId)) {
-                    uniqueArtifacts.set(slot.artifactId, slot);
+                  if (representatives && !representatives.has(slot.index)) continue;
+                  const imageId = slot.preview?.artifactId ?? slot.artifactId;
+                  if (!uniqueArtifacts.has(imageId)) {
+                    uniqueArtifacts.set(imageId, slot);
                   }
                 }
                 const uniqueBytes = [...uniqueArtifacts.values()].reduce(
-                  (sum, slot) => sum + slot.byteSize,
+                  (sum, slot) => sum + (slot.preview?.byteSize ?? slot.byteSize),
                   0,
                 );
                 const inlineIndividual = output.presentation === "individual" ||
@@ -482,8 +491,11 @@ export function buildMcpServer(
                     `Scheduled exact frame ${slot.index} at ${slot.requestedAtMs} ms`,
                     slot.mimeType,
                   );
-                  if (!inline || emittedImages.has(slot.artifactId)) continue;
-                  const artifact = store.getArtifact(slot.artifactId);
+                  if (slot.preview) appendResourceLink(content, seenResourceUris,
+                    slot.preview.resource, "Derived frame preview with source-coordinate rulers", slot.preview.mimeType);
+                  const imageId = slot.preview?.artifactId ?? slot.artifactId;
+                  if (!inline || (representatives && !representatives.has(slot.index)) || emittedImages.has(imageId)) continue;
+                  const artifact = store.getArtifact(imageId);
                   if (!artifact) continue;
                   const bytes = await blobs.read(
                     artifact.artifactId,
@@ -495,7 +507,7 @@ export function buildMcpServer(
                     data: bytes.toString("base64"),
                     mimeType: artifact.mimeType,
                   });
-                  emittedImages.add(slot.artifactId);
+                  emittedImages.add(imageId);
                 }
                 diagnosticLog(config.debug, "get-frames-presentation", {
                   presentation: output.presentation,
@@ -600,12 +612,14 @@ export function buildMcpServer(
                 (typeof output.frames)[number]
               >();
               for (const frame of output.frames) {
-                if (!uniqueArtifacts.has(frame.artifactId)) {
-                  uniqueArtifacts.set(frame.artifactId, frame);
+                if (representatives && !representatives.has(frame.index)) continue;
+                const imageId = frame.preview?.artifactId ?? frame.artifactId;
+                if (!uniqueArtifacts.has(imageId)) {
+                  uniqueArtifacts.set(imageId, frame);
                 }
               }
               const uniqueBytes = [...uniqueArtifacts.values()].reduce(
-                (sum, frame) => sum + frame.byteSize,
+                (sum, frame) => sum + (frame.preview?.byteSize ?? frame.byteSize),
                 0,
               );
               const inline = uniqueBytes <= config.limits.imageResponseBytes;
@@ -620,8 +634,11 @@ export function buildMcpServer(
                   `Exact frame at ${frame.atMs} ms`,
                   frame.mimeType,
                 );
-                if (inline && !emittedImages.has(frame.artifactId)) {
-                  const artifact = store.getArtifact(frame.artifactId);
+                if (frame.preview) appendResourceLink(content, seenResourceUris,
+                  frame.preview.resource, "Derived frame preview with source-coordinate rulers", frame.preview.mimeType);
+                const imageId = frame.preview?.artifactId ?? frame.artifactId;
+                if (inline && (!representatives || representatives.has(frame.index)) && !emittedImages.has(imageId)) {
+                  const artifact = store.getArtifact(imageId);
                   if (artifact) {
                     const bytes = await blobs.read(
                       artifact.artifactId,
@@ -633,7 +650,7 @@ export function buildMcpServer(
                       data: bytes.toString("base64"),
                       mimeType: artifact.mimeType,
                     });
-                    emittedImages.add(frame.artifactId);
+                    emittedImages.add(imageId);
                   }
                 }
               }

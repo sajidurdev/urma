@@ -165,6 +165,36 @@ export function largestExactFrameGaps(
   return largestUnsampledGaps(durationMs, exactFrameTimestampsMs, 3);
 }
 
+/** Split the largest spacing first, breaking ties by source time. Integer ms only. */
+export function refineGapPoints(
+  startMs: number,
+  endMs: number,
+  historyMs: readonly number[],
+  budget: number,
+): number[] {
+  assertInterval(startMs, endMs);
+  if (!Number.isSafeInteger(budget) || budget < 1 || budget > 12) {
+    throw new RangeError(`Refinement budget must be an integer from 1 to 12; received ${String(budget)}`);
+  }
+  const points = new Set(historyMs.filter((point) =>
+    Number.isSafeInteger(point) && point >= startMs && point < endMs
+  ));
+  const selected: number[] = [];
+  for (let index = 0; index < budget; index++) {
+    const boundaries = [startMs, ...[...points].sort((a, b) => a - b), endMs];
+    const gaps = boundaries.slice(0, -1).map((start, offset) => ({
+      start, end: boundaries[offset + 1]!,
+    })).filter(({ start, end }) => end - start > (points.has(start) ? 1 : 0))
+      .sort((a, b) => (b.end - b.start) - (a.end - a.start) || a.start - b.start);
+    const gap = gaps[0];
+    if (!gap) break;
+    const atMs = gap.start + Math.floor((gap.end - gap.start) / 2);
+    points.add(atMs);
+    selected.push(atMs);
+  }
+  return selected;
+}
+
 /** Gaps between this response's reported times, including the interval edges. */
 export function summarizeSamplingGaps(
   startMs: number,

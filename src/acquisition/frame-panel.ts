@@ -9,8 +9,10 @@ import { collectBinaryVersions } from "../subprocess/versions.js";
 import { BlobStore } from "../store/blob-store.js";
 import type { StoredArtifact, UrmaStore } from "../store/store.js";
 import { URMA_VERSION } from "../version.js";
+import type { FrameCropGeometry } from "../core/frame-crop.js";
 import {
   createPanel,
+  RULER_STYLE_VERSION,
   framePanelDimensions,
   type PanelDimensions,
 } from "./panel.js";
@@ -49,14 +51,21 @@ export class FramePanelAcquirer {
     source: ResolvedSource,
     frames: readonly ExactFrame[],
     signal?: AbortSignal,
+    options: Readonly<{ rulers?: boolean; individual?: boolean }> = {},
   ): Promise<FramePanelResult> {
     const timesMs = frames.map((frame) => frame.atMs);
     const artifactIds = frames.map((frame) => frame.artifact.artifactId);
-    const dimensions = framePanelDimensions(frames.length);
+    const crops = frames.map((frame) => frame.artifact.producer.crop as FrameCropGeometry | undefined);
+    const individual = options.individual === true;
+    const rulers = options.rulers === true || individual;
+    const dimensions = individual ? {
+      columns: 1, rows: 1, width: 1360, height: 832,
+      cellWidth: 1360, frameHeight: 800, captionHeight: 32,
+    } : framePanelDimensions(frames.length, rulers);
     const requestKey = deterministicRequestKey(
       source.revision,
       "frame-panel",
-      { timesMs, artifactIds },
+      { timesMs, artifactIds, ...(rulers ? { rulers: true, rulerStyle: RULER_STYLE_VERSION, individual, crops: crops.map((crop) => crop ?? null) } : {}) },
       "frame-panel",
     );
     const cached = this.store.getArtifactByRequest(requestKey);
@@ -70,6 +79,10 @@ export class FramePanelAcquirer {
     ) {
       try {
         await this.blobs.verify(cached.artifactId, cached.blobPath);
+        const artifact = { ...cached, sourceRef: source.sourceRef, sourceRevision: source.revision };
+        if (cached.sourceRef !== source.sourceRef || cached.sourceRevision !== source.revision) {
+          this.store.putArtifact(artifact, { requestKey, operation: "frame-panel" }, artifactIds);
+        }
         diagnosticLog(this.config.debug, "frame-panel", {
           status: "cache-hit",
           cellCount: frames.length,
@@ -77,7 +90,7 @@ export class FramePanelAcquirer {
           canvasHeight: dimensions.height,
           imageBytes: cached.byteSize,
         });
-        return { artifact: cached, dimensions, cacheHit: true };
+        return { artifact, dimensions, cacheHit: true };
       } catch {
       }
     }
@@ -97,7 +110,9 @@ export class FramePanelAcquirer {
       }
       const output = path.join(working, "panel.jpg");
       await createPanel(this.config, paths, timesMs, output, signal, {
-        presentation: "exact-frames",
+        presentation: individual ? "individual" : "exact-frames",
+        rulers,
+        crops,
       });
       const blob = await this.blobs.putFile(
         output,
@@ -126,6 +141,7 @@ export class FramePanelAcquirer {
           pointsMs: timesMs,
           artifactIds,
           count: frames.length,
+          ...(rulers ? { rulers: true, rulerStyle: RULER_STYLE_VERSION, coordinateSpace: "individual-displayed-source", individual } : {}),
         },
         producer: {
           version: "frame-panel",

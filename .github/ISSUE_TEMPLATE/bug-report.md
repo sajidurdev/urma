@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report an installation, MCP host, or source/provider problem
+about: Report an installation, MCP client, or video source problem
 title: "[Bug] "
 labels: ""
 assignees: ""
@@ -9,11 +9,13 @@ assignees: ""
 Fill in the fields that apply. Remove credentials, private URLs, and personal
 paths from logs before posting.
 
+For vulnerabilities, use the [private reporting process](https://github.com/sajidurdev/urma/blob/main/.github/SECURITY.md#report-a-vulnerability).
+
 ## Environment
 
 - OS version and architecture:
 - Node.js version:
-- MCP host and version:
+- MCP client and version:
 - Installed Urma version (or package version requested if setup failed):
 - Source type/provider (local file, YouTube, or another HTTP(S) source):
 
@@ -35,9 +37,9 @@ video that reproduces it.
 ## Diagnostics
 
 If installation completed, run `doctor` through the installed launcher as
-shown in the [README](https://github.com/sajidurdev/urma#cli-and-maintenance).
-Use the same data root and local-root settings as the MCP host. If setup or
-the launcher fails, include that error below instead.
+shown in [updates and troubleshooting](https://github.com/sajidurdev/urma/blob/main/README.md#updates-and-troubleshooting).
+Use the same data directory and allowed local folders as the MCP client. If
+setup or the launcher fails, include that error below instead.
 
 Include the error code and relevant output as text. Note whether the failure
 happens every time or intermittently.

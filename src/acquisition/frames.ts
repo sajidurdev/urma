@@ -6,6 +6,7 @@ import {
   measureDiagnosticAsync,
 } from "../core/diagnostics.js";
 import { normalizeError, UrmaError } from "../core/errors.js";
+import { validateFrameCrop, type FrameCrop } from "../core/frame-crop.js";
 import { deterministicRequestKey } from "../core/request-key.js";
 import type { InvestigationRef } from "../core/ids.js";
 import type { ResolvedSource } from "../sources/types.js";
@@ -94,12 +95,13 @@ function frameExtractorVersion(source: Pick<ResolvedSource, "kind">): string {
 export function exactFrameRequestKey(
   source: Pick<ResolvedSource, "sourceRef" | "revision" | "kind">,
   atMs: number,
+  crop?: FrameCrop,
 ): string {
   return deterministicRequestKey(
     source.revision,
     "frame",
-    { sourceRef: source.sourceRef, atMs, format: "jpeg" },
-    frameExtractorVersion(source),
+    { sourceRef: source.sourceRef, atMs, format: "jpeg", ...(crop ? { crop } : {}) },
+    crop ? `${frameExtractorVersion(source)}-crop-v1` : frameExtractorVersion(source),
   );
 }
 
@@ -120,7 +122,7 @@ export type FrameTargetOutcome =
     atMs: number;
   }>;
 
-function mediaForGlobalTimestamp(
+export function mediaForGlobalTimestamp(
   artifact: StoredArtifact,
   mediaPath: string,
   globalTimeMs: number,
@@ -212,6 +214,7 @@ export class FrameAcquirer {
     ref: InvestigationRef,
     timesMs: readonly number[],
     signal?: AbortSignal,
+    crop?: FrameCrop,
   ): Promise<
     Array<{ atMs: number; artifact: StoredArtifact; cacheHit: boolean }>
   > {
@@ -221,6 +224,7 @@ export class FrameAcquirer {
       timesMs,
       signal,
       false,
+      crop,
     );
     return outcomes.map((outcome) => {
       if (outcome.status === "success") {
@@ -244,8 +248,9 @@ export class FrameAcquirer {
     ref: InvestigationRef,
     timesMs: readonly number[],
     signal?: AbortSignal,
+    crop?: FrameCrop,
   ): Promise<readonly FrameTargetOutcome[]> {
-    return await this.#getOutcomes(source, ref, timesMs, signal, true);
+    return await this.#getOutcomes(source, ref, timesMs, signal, true, crop);
   }
 
   async #getOutcomes(
@@ -254,7 +259,9 @@ export class FrameAcquirer {
     timesMs: readonly number[],
     signal: AbortSignal | undefined,
     allowTargetErrors: boolean,
+    crop?: FrameCrop,
   ): Promise<FrameTargetOutcome[]> {
+    if (crop) crop = validateFrameCrop(crop);
     const trace = currentExactFrameDiagnosticTrace();
     trace?.setRequestedTimestamps(timesMs);
     const frameIndexByTime = new Map<number, number>();
@@ -328,7 +335,7 @@ export class FrameAcquirer {
       const lookupStarted = performance.now();
       let cacheHit = false;
       try {
-        const key = exactFrameRequestKey(source, atMs);
+        const key = exactFrameRequestKey(source, atMs, crop);
         const artifact = this.store.getArtifactByRequest(key);
         if (artifact) {
           try {
@@ -675,10 +682,10 @@ export class FrameAcquirer {
         frameIndex: number,
       ): Promise<void> => {
         const output = path.join(working, `frame-${outputIndex}.jpg`);
-        await measureDiagnosticAsync(
+        const cropGeometry = await measureDiagnosticAsync(
           trace,
           "ffmpegExactFrameExtractionMs",
-          () => ffmpeg.extractJpeg(media.path, media.seekMs, output, signal),
+          () => ffmpeg.extractJpeg(media.path, media.seekMs, output, signal, crop),
           frameIndex,
         );
         await measureDiagnosticAsync(
@@ -703,7 +710,7 @@ export class FrameAcquirer {
             }),
           frameIndex,
         );
-        const requestKey = exactFrameRequestKey(source, atMs);
+        const requestKey = exactFrameRequestKey(source, atMs, crop);
         const artifact: StoredArtifact = {
           artifactId: blob.artifactId,
           sourceRef: source.sourceRef,
@@ -716,12 +723,13 @@ export class FrameAcquirer {
           blobPath: blob.relativePath,
           startMs: atMs,
           endMs: atMs,
-          params: { atMs, format: "jpeg" },
+          params: { atMs, format: "jpeg", ...(crop ? { crop } : {}) },
           producer: {
-            version: frameExtractorVersion(source),
+            version: crop ? `${frameExtractorVersion(source)}-crop-v1` : frameExtractorVersion(source),
             urmaVersion: URMA_VERSION,
             ...versions,
             transportArtifactId: media.parent?.artifactId ?? null,
+            ...(cropGeometry ? { crop: cropGeometry } : {}),
           },
           createdAt: new Date().toISOString(),
         };

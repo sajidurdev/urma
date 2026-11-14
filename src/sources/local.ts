@@ -195,8 +195,8 @@ export function localSnapshotRevision(bundle: PinnedLocalBundle): string {
       byteSize: bundle.caption.byteSize,
       extension: extensionForCaption(bundle.identity.captionSidecar ?? ""),
     };
-  return `local:v2:${sha256(stableJson({
-    version: 2,
+  return `local:v3:${sha256(stableJson({
+    version: 3,
     video: { sha256: bundle.video.sha256, byteSize: bundle.video.byteSize },
     caption,
   }))}`;
