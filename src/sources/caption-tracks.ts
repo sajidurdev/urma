@@ -3,6 +3,7 @@ import type { TranscriptKind } from "../core/model.js";
 import type {
   CaptionTrackSummary,
   CaptionVariantSummary,
+  EmbeddedCaption,
 } from "./types.js";
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -17,6 +18,12 @@ function kind(value: unknown): TranscriptKind | null {
     : null;
 }
 
+export function parseEmbeddedCaption(value: unknown): EmbeddedCaption | undefined {
+  if (!record(value) || !Number.isSafeInteger(value.streamIndex) || (value.streamIndex as number) < 0 ||
+    (value.codec !== "subrip" && value.codec !== "webvtt" && value.codec !== "mov_text") || typeof value.default !== "boolean") return undefined;
+  return { streamIndex: value.streamIndex as number, codec: value.codec, default: value.default };
+}
+
 export function makeCaptionTrack(
   sourceRef: SourceRef,
   sourceRevision: string,
@@ -27,6 +34,7 @@ export function makeCaptionTrack(
     formats: readonly string[];
     providerTrackId: string | null;
     variants?: readonly CaptionVariantSummary[];
+    embedded?: EmbeddedCaption;
   },
 ): CaptionTrackSummary {
   return {
@@ -86,6 +94,8 @@ export function hydrateCaptionTracks(
           : [];
       }).slice(0, 20)
       : [];
+    const embedded = parseEmbeddedCaption(raw.embedded);
+    if (raw.embedded !== undefined && !embedded) continue;
     output.push(
       makeCaptionTrack(sourceRef, sourceRevision, {
         language,
@@ -94,6 +104,7 @@ export function hydrateCaptionTracks(
         formats,
         providerTrackId,
         variants,
+        ...(embedded ? { embedded } : {}),
       }),
     );
     if (output.length >= 200) break;

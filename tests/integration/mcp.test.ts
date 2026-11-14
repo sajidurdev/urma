@@ -151,23 +151,23 @@ test("MCP v2 exposes exactly five bounded tools and investigation-scoped artifac
   const expectedSchemaHashes = {
     inspect_video: [
       "3161096be6d41ab5e929f0d7a0a3dccf2422509cb2b7c8103223a20e342fb404",
-      "9260778f78381c328663a213f21a27ab879e14dbe405ae0e2cd02fe7cf88d291",
+      "6a9416f799e901ed33529d82eab4eafc04cdab64a20877011f9dc8b5bc741a3a",
     ],
     search_transcript: [
       "1dbba1766a650d9a4c745ecfef3ce876c457085b374cc75d80e1905210ac6779",
-      "6810adb1dc847380e3bf46b619201cfde3f886647df318491b8a8f2687473557",
+      "7937d3294eb9e25ad74ee0382bec6e1c909b3e60b90baa8edf00ede6e203db21",
     ],
     read_transcript: [
       "2b635bcab21ff13e86b00b9ad88d2e948894268e3b6ba7827f734d868efe7411",
-      "bc1c43c7f61b1381597261637e133fdb284c96cd4dbca9b421fc1d7483e5a9a0",
+      "3f9bc45e3871b22b80dbd63b36e0ca2c23641cabcea83c3b215f4fbc9a10c666",
     ],
     get_overview: [
-      "5e8fa0f2b3ce40050c20aeb04b8afde7357d17e2200806f83798f647c4d1be11",
-      "d5ea0e65759cf6f5ab657dafaf12696c45c47e50f466e94dea28c9c7cb803954",
+      "79056198436d3fee461ba6317ba59186eb8f1c6c9288bdd9fb9376476998a183",
+      "e7b290b78d8df5c52d1689af0273c2d7a88fbdf6cdfd9e9d1190d8c422d96c67",
     ],
     get_frames: [
-      "e3233903af29b260f2a0be3d91f96ea35fd0d88879f3c183817975c49dfe8825",
-      "b968e5dc63cc92c2e51a225430c43a05f5e840b1719839b7f5341feaf70c347c",
+      "006d48d729de032114e630f7de734cb0767d7b6b3810af249ba60d71780e3729",
+      "270f9e4bcfe836e08e06967f8786500e66d52085605fbfb01b2b5cbaa9e60fb1",
     ],
   } as const;
   for (const tool of tools.tools) {

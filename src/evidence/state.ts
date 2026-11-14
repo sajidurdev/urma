@@ -23,6 +23,7 @@ import {
   type TranscriptKind,
 } from "../core/model.js";
 import { UrmaError } from "../core/errors.js";
+import { frameCropGeometry, type FrameCropGeometry } from "../core/frame-crop.js";
 import type { UrmaStore } from "../store/store.js";
 
 const OVERVIEW_RELATIONS = new Set<OverviewSampleReuse["relation"]>([
@@ -38,6 +39,18 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 function nonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+function presentationCrop(value: unknown): FrameCropGeometry | null {
+  if (!record(value) || !record(value.requested) || !record(value.pixels) ||
+    value.coordinates !== "displayed-source-percent" ||
+    typeof value.sourceWidth !== "number" || typeof value.sourceHeight !== "number") return null;
+  try {
+    const requested = value.requested;
+    if (![requested.x, requested.y, requested.w, requested.h].every((item) => typeof item === "number")) return null;
+    const crop = frameCropGeometry(requested as FrameCropGeometry["requested"], value.sourceWidth, value.sourceHeight);
+    const pixels = value.pixels;
+    return Object.entries(crop.pixels).every(([key, item]) => pixels[key] === item) ? crop : null;
+  } catch { return null; }
 }
 function provenance(value: unknown): OverviewCell["provenance"] | null {
   if (
@@ -317,10 +330,12 @@ export function deriveInvestigationState(
       entry.startMs !== null &&
       entry.artifactId
     ) {
+      const crop = presentationCrop(entry.metadata.crop);
       exact.push({
         kind: "point",
         atMs: entry.startMs,
         artifactId: entry.artifactId,
+        ...(crop ? { crop } : {}),
       });
     } else if (
       entry.evidenceKind === "ordered_points" &&
@@ -331,12 +346,15 @@ export function deriveInvestigationState(
       const ids = Array.isArray(entry.metadata.artifactIds)
         ? (entry.metadata.artifactIds as ArtifactId[])
         : [];
+      const crops = Array.isArray(entry.metadata.crops) ? entry.metadata.crops.map(presentationCrop) : [];
       ordered.push({
         kind: "ordered_points",
         startMs: entry.startMs,
         endMs: entry.endMs,
         pointsMs: entry.pointsMs,
         artifactIds: ids,
+        ...(crops.length === entry.pointsMs.length && crops.every((crop) => crop !== null)
+          ? { crops: crops as FrameCropGeometry[] } : {}),
       });
     } else if (
       entry.evidenceKind === "audio" &&

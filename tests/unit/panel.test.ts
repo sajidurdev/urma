@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -177,4 +177,52 @@ test("exact-frame panels preserve landscape, portrait, and ultrawide aspect rati
       `${item.name} caption band must sit outside source evidence pixels`,
     );
   }
+});
+
+test("ruler panels keep axes outside each source image, including extreme aspect ratios", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "urma-rulers-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  const config = loadConfig({ URMA_DATA_DIR: directory, URMA_FFMPEG: "ffmpeg" });
+  const frames: string[] = [];
+  for (const size of ["160x90", "90x160", "2x2048", "2048x2"]) {
+    const image = path.join(directory, `${size}.jpg`);
+    await runChecked("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", `color=c=red:s=${size}:r=1`,
+      "-frames:v", "1", "-q:v", "2", "-y", image], { timeoutMs: 30_000 });
+    frames.push(image);
+  }
+  const output = path.join(directory, "panel.jpg");
+  const geometry = await createPanel(config, frames, [0, 1000, 2000, 3000], output, undefined,
+    { presentation: "exact-frames", rulers: true });
+  assert.equal(geometry.width, 1200);
+  assert.equal(geometry.height, 584);
+  assert(red(await pixel(output, 50, 50)));
+  assert(red(await pixel(output, 350, 210)));
+  assert(red(await pixel(output, 600, 130)));
+  assert(black(await pixel(output, 450, 130)), "portrait tile letterboxing does not become source coordinates");
+  assert(black(await pixel(output, 20, 240)), "caption and rulers remain outside source content");
+  assert(red(await pixel(output, 999, 100)), "a one-pixel-wide fitted frame remains visible");
+  assert(red(await pixel(output, 100, 421)), "a one-pixel-high fitted frame remains visible");
+  const labels = await runChecked("ffmpeg", ["-v", "error", "-i", output, "-vf", "crop=300:16:40:8,format=gray",
+    "-frames:v", "1", "-f", "rawvideo", "pipe:1"], { timeoutMs: 30_000, maxStdoutBytes: 5000 });
+  assert([...labels.stdout].filter((value) => value > 180).length > 25,
+    "numeric coordinate labels must render above the source");
+});
+
+test("ruler borders separate light and dark frames without covering source pixels", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "urma-ruler-borders-"));
+  t.after(async () => { await rm(directory, { recursive: true, force: true }); });
+  const config = loadConfig({ URMA_DATA_DIR: directory });
+  for (const color of ["black", "white"]) {
+    const source = path.join(directory, `${color}.jpg`), output = path.join(directory, `${color}-panel.jpg`);
+    await runChecked("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", `color=c=${color}:s=160x90:r=1`, "-frames:v", "1", "-y", source], { timeoutMs: 30_000 });
+    await createPanel(config, [source], [0], output, undefined, { presentation: "exact-frames", rulers: true });
+    const rows = await runChecked("ffmpeg", ["-v", "error", "-i", output, "-vf", "format=rgb24,crop=1:3:100:38:exact=1", "-frames:v", "1", "-f", "rawvideo", "pipe:1"], { timeoutMs: 30_000, maxStdoutBytes: 9 });
+    assert(rows.stdout[0]! > 180 && rows.stdout[1]! > 180 && rows.stdout[2]! > 180, "outer border is light");
+    assert(rows.stdout[3]! < 75 && rows.stdout[4]! < 75 && rows.stdout[5]! < 75, "inner border is dark");
+    for (const value of rows.stdout.subarray(6)) assert(color === "white" ? value > 235 : value < 20, "source edge remains visible");
+  }
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(createPanel(config, [path.join(directory, "black.jpg")], [0], path.join(directory, "cancelled.jpg"), controller.signal,
+    { presentation: "exact-frames", rulers: true }), /cancelled/u);
+  assert((await readdir(directory)).every((name) => !name.startsWith("ruler-filters-")), "temporary filter scripts are removed on success and cancellation");
 });

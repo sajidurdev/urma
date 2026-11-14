@@ -35,7 +35,7 @@ import type {
   ResolvedSource,
 } from "./types.js";
 import { parseYouTubeUrl } from "./youtube.js";
-import { makeCaptionTrack } from "./caption-tracks.js";
+import { makeCaptionTrack, parseEmbeddedCaption } from "./caption-tracks.js";
 import type { SourceRef } from "../core/ids.js";
 import { safeFormatDescription } from "./candidates.js";
 import { assertRemoteTargetAllowed } from "../remote/egress.js";
@@ -676,6 +676,18 @@ export async function inspectLocal(
       }),
     ]
     : [];
+  for (const stream of streams) {
+    if (captionTracks.length >= 200 || stream.codec_type !== "subtitle") continue;
+    const embedded = parseEmbeddedCaption({ streamIndex: stream.index, codec: stream.codec_name,
+      default: record(stream.disposition) && stream.disposition.default === 1 });
+    if (!embedded) continue;
+    const tags = record(stream.tags) ? stream.tags : {};
+    const language = typeof tags.language === "string" && /^[A-Za-z0-9._-]{1,100}$/u.test(tags.language) ? tags.language : "und";
+    captionTracks.push(makeCaptionTrack(identity.sourceRef, revision, {
+      language, kind: "unknown", displayName: text(tags.title)?.slice(0, 200) ?? null,
+      formats: ["vtt"], providerTrackId: `embedded:${embedded.streamIndex}`, embedded,
+    }));
+  }
   const rawTitle = path.basename(identity.canonicalPath);
   return {
     sourceRef: identity.sourceRef,

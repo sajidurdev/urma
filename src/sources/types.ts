@@ -17,6 +17,11 @@ export type CaptionVariantSummary = Readonly<{
   format: "json3" | "vtt" | "srt" | string;
   providerVariantId: string | null;
 }>;
+export type EmbeddedCaption = Readonly<{
+  streamIndex: number;
+  codec: "subrip" | "webvtt" | "mov_text";
+  default: boolean;
+}>;
 
 export type CaptionTrackSummary = Readonly<{
   trackRef: TrackRef;
@@ -26,6 +31,7 @@ export type CaptionTrackSummary = Readonly<{
   formats: readonly string[];
   providerTrackId: string | null;
   variants?: readonly CaptionVariantSummary[];
+  embedded?: EmbeddedCaption;
 }>;
 export type FormatSummary = Readonly<{
   /** Provider selector used only inside an acquisition lease */

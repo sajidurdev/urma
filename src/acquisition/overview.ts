@@ -23,7 +23,7 @@ import { BlobStore } from "../store/blob-store.js";
 import type { StoredArtifact, UrmaStore } from "../store/store.js";
 import { URMA_VERSION } from "../version.js";
 import { MediaAcquirer } from "./media.js";
-import { createPanel } from "./panel.js";
+import { createPanel, RULER_STYLE_VERSION } from "./panel.js";
 import { StoryboardAcquirer } from "./storyboard.js";
 import type { RemoteOperationContext } from "../remote/operation-context.js";
 
@@ -268,12 +268,13 @@ export class OverviewAcquirer {
     startMs: number,
     endMs: number,
     signal?: AbortSignal,
+    rulers = false,
   ): Promise<OverviewResult> {
     assertInterval(startMs, endMs, source.durationMs);
     const requestKey = deterministicRequestKey(
       source.revision,
       "overview",
-      { startMs, endMs, count: OVERVIEW_CELL_COUNT },
+      { startMs, endMs, count: OVERVIEW_CELL_COUNT, ...(rulers ? { rulers: true, rulerStyle: RULER_STYLE_VERSION } : {}) },
       OVERVIEW_CONTRACT_ID,
     );
     const cached = this.store.getArtifactByRequest(requestKey);
@@ -282,6 +283,10 @@ export class OverviewAcquirer {
         await this.blobs.verify(cached.artifactId, cached.blobPath);
         const parsed = cachedOverview(cached, { startMs, endMs });
         if (parsed) {
+          const artifact = { ...cached, sourceRef: source.sourceRef, sourceRevision: source.revision };
+          if (cached.sourceRef !== source.sourceRef || cached.sourceRevision !== source.revision) {
+            this.store.putArtifact(artifact, { requestKey, operation: "overview" });
+          }
           diagnosticLog(this.config.debug, "overview", {
             status: "cache-hit",
             source: parsed.source,
@@ -291,7 +296,7 @@ export class OverviewAcquirer {
             imageBytes: cached.byteSize,
           });
           return {
-            artifact: cached,
+            artifact,
             requestedPointsMs: parsed.requestedPointsMs,
             pointsMs: parsed.pointsMs,
             cells: parsed.cells,
@@ -389,6 +394,7 @@ export class OverviewAcquirer {
         pointsMs,
         panelPath,
         signal,
+        { rulers },
       );
       const blob = await this.blobs.putFile(
         panelPath,
@@ -418,6 +424,7 @@ export class OverviewAcquirer {
           cells,
           source: sourceKind,
           count: pointsMs.length,
+          ...(rulers ? { rulers: true, rulerStyle: RULER_STYLE_VERSION, coordinateSpace: "individual-displayed-source" } : {}),
         },
         producer: {
           version: OVERVIEW_CONTRACT_ID,
